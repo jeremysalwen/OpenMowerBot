@@ -1,0 +1,26 @@
+node_modules/
+.env
+.env.*
+!.env.example
+
+# Raw exports and media can be large or private. Commit intentionally.
+data/raw*/**
+data/raw-incremental/**
+data/corpus-incremental/**
+data/media/**
+!data/raw/.gitkeep
+!data/media/.gitkeep
+
+# Derived indexes are reproducible. Commit them only when publishing a static corpus.
+data/index/**
+!data/index/.gitkeep
+
+# Compact corpus files and selected attachments are intended to be reviewed and committed.
+!data/corpus/
+!data/corpus/**
+!data/attachments/
+!data/attachments/**
+
+# Local browser/CLI caches.
+.cache/
+dist/

@@ -1,0 +1,92 @@
+name: Update Discord corpus
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  update-corpus:
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+      OPENMOWER_GUILD_ID: ${{ secrets.OPENMOWER_GUILD_ID }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download DiscordChatExporter
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/dce
+          python3 - <<'PY' > .cache/dce/url.txt
+          import json
+          import urllib.request
+
+          url = "https://api.github.com/repos/Tyrrrz/DiscordChatExporter/releases/latest"
+          with urllib.request.urlopen(url) as response:
+              release = json.load(response)
+
+          for asset in release["assets"]:
+              if asset["name"] == "DiscordChatExporter.Cli.linux-x64.zip":
+                  print(asset["browser_download_url"])
+                  break
+          else:
+              raise SystemExit("DiscordChatExporter.Cli.linux-x64.zip not found")
+          PY
+          curl -L "$(cat .cache/dce/url.txt)" -o .cache/dce/dce.zip
+          unzip -q .cache/dce/dce.zip -d .cache/dce
+          chmod +x .cache/dce/DiscordChatExporter.Cli
+
+      - name: Export incremental Discord history
+        run: |
+          node ./bin/discord-history.mjs export \
+            --incremental \
+            --raw data/raw-incremental/latest \
+            --exporter .cache/dce/DiscordChatExporter.Cli \
+            --parallel 8
+
+      - name: Build incremental corpus
+        run: |
+          node ./bin/discord-history.mjs build-corpus \
+            --raw data/raw-incremental/latest \
+            --out data/corpus-incremental \
+            --allow-empty
+
+      - name: Merge corpus
+        run: |
+          node ./bin/discord-history.mjs merge-corpus \
+            --base data/corpus \
+            --delta data/corpus-incremental \
+            --out data/corpus
+
+      - name: Download selected attachments
+        run: |
+          node ./bin/discord-history.mjs download-attachments \
+            --corpus data/corpus \
+            --max-size 500000
+
+      - name: Show corpus stats
+        run: node ./bin/discord-history.mjs stats --corpus data/corpus
+
+      - name: Commit updates
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/corpus data/attachments
+          if git diff --cached --quiet; then
+            echo "No corpus changes."
+          else
+            git commit -m "Update Discord corpus"
+            git push
+          fi
