@@ -30,6 +30,78 @@ export async function searchMessages(indexDir, options = {}) {
     .slice(0, limit);
 }
 
+export async function getConversationContext(indexDir, options = {}) {
+  const messagesPath = path.join(indexDir, "messages.jsonl");
+  const limit = Number(options.limit || 80);
+  const minutesBefore = Number(options.minutesBefore || options["minutes-before"] || 45);
+  const minutesAfter = Number(options.minutesAfter || options["minutes-after"] || 45);
+  let center = null;
+
+  if (options.messageId) {
+    for await (const message of readJsonl(messagesPath)) {
+      if (message.id === String(options.messageId)) {
+        center = message;
+        break;
+      }
+    }
+
+    if (!center) {
+      throw new Error(`Message not found: ${options.messageId}`);
+    }
+  }
+
+  const channel = options.channel || center?.channelId || center?.channelName || "";
+  const centerTime = Date.parse(options.around || center?.timestamp || 0);
+  const after = options.after
+    ? Date.parse(options.after)
+    : Number.isFinite(centerTime)
+      ? centerTime - minutesBefore * 60 * 1000
+      : Number.NEGATIVE_INFINITY;
+  const before = options.before
+    ? Date.parse(options.before)
+    : Number.isFinite(centerTime)
+      ? centerTime + minutesAfter * 60 * 1000
+      : Number.POSITIVE_INFINITY;
+
+  if (!channel && (!Number.isFinite(after) || !Number.isFinite(before))) {
+    throw new Error("context requires --message-id, or --channel with --after/--before or --around.");
+  }
+
+  const messages = [];
+  for await (const message of readJsonl(messagesPath)) {
+    if (channel && !fieldIncludes([message.channelId, message.channelName], channel)) {
+      continue;
+    }
+
+    const timestamp = Date.parse(message.timestamp || 0);
+    if (!Number.isFinite(timestamp) || timestamp < after || timestamp > before) {
+      continue;
+    }
+
+    messages.push(message);
+  }
+
+  messages.sort((left, right) => (Date.parse(left.timestamp || 0) || 0) - (Date.parse(right.timestamp || 0) || 0));
+
+  if (messages.length <= limit) {
+    return messages;
+  }
+
+  if (!Number.isFinite(centerTime)) {
+    return messages.slice(0, limit);
+  }
+
+  return messages
+    .map((message) => ({
+      message,
+      distance: Math.abs((Date.parse(message.timestamp || 0) || 0) - centerTime),
+    }))
+    .sort((left, right) => left.distance - right.distance)
+    .slice(0, limit)
+    .map((entry) => entry.message)
+    .sort((left, right) => (Date.parse(left.timestamp || 0) || 0) - (Date.parse(right.timestamp || 0) || 0));
+}
+
 export function formatSearchResult(result) {
   const message = result.message;
   const author = message.authorNickname || message.authorName || message.authorId || "unknown";
@@ -41,6 +113,16 @@ export function formatSearchResult(result) {
     : "";
 
   return `[${timestamp}] #${channel} ${author}: ${content}${attachments}`;
+}
+
+export function formatContextMessage(message) {
+  const author = message.authorNickname || message.authorName || message.authorId || "unknown";
+  const channel = message.channelName || message.channelId || "unknown";
+  const timestamp = message.timestamp || "unknown-time";
+  const content = singleLine(message.content || "");
+  const url = message.messageUrl ? ` ${message.messageUrl}` : "";
+
+  return `[${timestamp}] #${channel} ${author}: ${content}${url}`;
 }
 
 function normalizeQuery(input) {

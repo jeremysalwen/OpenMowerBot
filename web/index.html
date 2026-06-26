@@ -3,22 +3,17 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>OpenMower Discord History</title>
-    <link rel="stylesheet" href="./styles.css?v=2026-06-26.3">
+    <title>OpenMower Discord Assistant</title>
+    <link rel="stylesheet" href="./styles.css?v=2026-06-26.5">
   </head>
   <body>
     <main class="app">
-      <section class="toolbar" aria-label="Search controls">
-        <div class="query-row">
-          <input id="query" type="search" autocomplete="off" placeholder="Search the OpenMower Discord history">
-          <button id="search" type="button">Search</button>
-          <button id="answer" type="button">Answer</button>
+      <header class="topbar">
+        <div>
+          <h1>OpenMower Discord Assistant</h1>
+          <p id="summary">Loading index...</p>
         </div>
-        <div class="filters">
-          <input id="channel" type="text" autocomplete="off" placeholder="Channel">
-          <input id="author" type="text" autocomplete="off" placeholder="Author">
-          <input id="after" type="date" aria-label="After date">
-          <input id="before" type="date" aria-label="Before date">
+        <div class="model-controls">
           <select id="engine" aria-label="Answer engine">
             <option value="auto">Auto LLM</option>
             <option value="webllm">WebLLM</option>
@@ -36,21 +31,28 @@
             <option value="onnx-community/Qwen3-0.6B-ONNX">Qwen3 0.6B</option>
             <option value="onnx-community/gemma-3-270m-it-ONNX">Gemma 3 270M</option>
           </select>
-          <label class="check">
-            <input id="attachments" type="checkbox">
-            <span>Attachments</span>
-          </label>
         </div>
+      </header>
+
+      <section class="filters" aria-label="Retrieval filters">
+        <input id="channel" type="text" autocomplete="off" placeholder="Channel">
+        <input id="author" type="text" autocomplete="off" placeholder="Author">
+        <input id="after" type="date" aria-label="After date">
+        <input id="before" type="date" aria-label="Before date">
+        <label class="check">
+          <input id="attachments" type="checkbox">
+          <span>Attachments</span>
+        </label>
       </section>
 
-      <section class="status" aria-live="polite">
-        <span id="summary">Loading index...</span>
-      </section>
+      <section id="transcript" class="transcript" aria-live="polite"></section>
 
-      <section id="answer-panel" class="answer-panel" hidden></section>
-      <section id="results" class="results" aria-label="Search results"></section>
+      <form id="composer" class="composer">
+        <textarea id="query" rows="1" autocomplete="off" placeholder="Ask about the OpenMower Discord history"></textarea>
+        <button id="send" type="submit">Send</button>
+      </form>
     </main>
 
-    <script type="module" src="./app.js?v=2026-06-26.3"></script>
+    <script type="module" src="./app.js?v=2026-06-26.5"></script>
   </body>
 </html>

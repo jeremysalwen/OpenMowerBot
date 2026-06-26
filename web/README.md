@@ -1,6 +1,6 @@
 # Browser App
 
-`index.html` is a static search page for the generated browser index in `data/index/browser`.
+`index.html` is a static chat page for the generated browser index in `data/index/browser`.
 
 Build the index first:
 
@@ -14,7 +14,15 @@ Serve the repository root, then open `/web/`:
 python3 -m http.server 8080
 ```
 
-The page supports lexical search, channel/author/date/attachment filters, Discord source links, and selected local attachment links. The Answer button can use:
+The page supports a chat interface, channel/author/date/attachment filters, Discord source links, and selected local attachment links. Each question runs a bounded agent loop before answering. The loop can make multiple tool calls, inspect observations, and stop when it has enough cited context.
+
+Available browser tools:
+
+- `searchDiscord`: finds likely messages from the static lexical index.
+- `getConversationContext`: expands a promising message into same-channel surrounding conversation.
+- `getChannelRange`: reads a channel time range directly when the filters define one.
+
+The answer engine can use:
 
 - Chrome's built-in local LLM API when available.
 - WebLLM loaded from CDN with a browser-cached WebGPU model.

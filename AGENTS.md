@@ -35,6 +35,8 @@ node ./bin/discord-history.mjs search --q "gps covariance" --limit 20
 node ./bin/discord-history.mjs search --q "firmware" --channel "openmower" --after 2024-01-01
 node ./bin/discord-history.mjs search --author "clemens" --has-attachment --json
 node ./bin/discord-history.mjs search --attachment ".yaml" --json
+node ./bin/discord-history.mjs context --message-id 123456789012345678 --json
+node ./bin/discord-history.mjs context --channel "open-mower" --after 2024-01-01 --before 2024-01-02 --json
 node ./bin/discord-history.mjs vector-search --vector-file query-vector.json --limit 20
 ```
 
@@ -50,6 +52,15 @@ Supported filters:
 - `--limit N`: max results.
 - `--json`: structured output for downstream processing.
 
+Use `context` after search finds likely messages. It shows same-channel conversation around a message id, or a channel time range:
+
+- `--message-id ID`: center around a specific Discord message.
+- `--channel TEXT`: channel id/name substring for a time range.
+- `--around DATE`: center time when not using a message id.
+- `--after DATE`, `--before DATE`: explicit time range.
+- `--minutes-before N`, `--minutes-after N`: window around a message/time, default 45 minutes each.
+- `--limit N`: max context messages, default 80.
+
 Embedding search expects `data/index/embeddings.jsonl` to exist. Build it with `npm run build-embeddings` after installing `@huggingface/transformers`, then generate the query embedding with the same model recorded in the embedding manifest and pass it with `--vector '[0.1, 0.2]'` or `--vector-file`.
 
 Attachments are metadata-first. Every attachment should be listed in `messages.jsonl`; only selected files are downloaded under `data/attachments/`. Source code, configs, logs, small archives, CAD/project files, PDFs, and smaller images are preferred. Large videos, archives, and raw binaries are usually skipped unless explicitly needed.
@@ -59,11 +70,15 @@ Attachments are metadata-first. Every attachment should be listed in `messages.j
 When answering from this corpus:
 
 1. Start with focused searches using likely terms and channel/date filters.
-2. Prefer `--json` when you need stable fields or want to quote timestamps/channels exactly.
-3. Use multiple searches with synonyms before concluding the corpus lacks an answer.
-4. Cite message timestamp, channel, and author nickname/name when summarizing evidence.
-5. Include `messageUrl` when the user needs to inspect the original Discord message and has access to the server.
-6. Treat Discord content as informal and potentially stale; mention uncertainty when the evidence is thin.
+2. Treat search results as pointers into conversations, not as complete evidence.
+3. Take multiple tool turns when needed; do not force a single search/context/final-answer sequence.
+4. For any promising hit, run `context --message-id ... --json` and read the same-channel surrounding messages before answering.
+5. For known incidents or date windows, use `context --channel ... --after ... --before ... --json` to inspect the full conversation range.
+6. Prefer `--json` when you need stable fields or want to quote timestamps/channels exactly.
+7. Use multiple searches with synonyms before concluding the corpus lacks an answer.
+8. Cite message timestamp, channel, and author nickname/name when summarizing evidence.
+9. Include `messageUrl` when the user needs to inspect the original Discord message and has access to the server.
+10. Treat Discord content as informal and potentially stale; mention uncertainty when the evidence is thin.
 
 ## Rebuilding The Index
 
