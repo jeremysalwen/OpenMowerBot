@@ -3,7 +3,7 @@ const WEBLLM_IMPORT_URL = "https://esm.run/@mlc-ai/web-llm";
 const TRANSFORMERS_IMPORT_URL = "https://esm.run/@huggingface/transformers";
 const DEFAULT_WEBLLM_MODEL = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
 const DEFAULT_TRANSFORMERS_MODEL = "onnx-community/SmolLM2-135M-Instruct-ONNX-MHA";
-const APP_VERSION = "2026-06-26.5";
+const APP_VERSION = "2026-06-26.6";
 const MAX_RESULTS = 48;
 const MAX_CANDIDATES = 900;
 const ANSWER_EVIDENCE_LIMIT = 24;
@@ -32,14 +32,7 @@ const state = {
 
 const els = {
   query: document.querySelector("#query"),
-  channel: document.querySelector("#channel"),
-  author: document.querySelector("#author"),
-  after: document.querySelector("#after"),
-  before: document.querySelector("#before"),
-  attachments: document.querySelector("#attachments"),
   engine: document.querySelector("#engine"),
-  webllmModel: document.querySelector("#webllm-model"),
-  transformersModel: document.querySelector("#transformers-model"),
   composer: document.querySelector("#composer"),
   send: document.querySelector("#send"),
   summary: document.querySelector("#summary"),
@@ -152,13 +145,7 @@ async function runAgentLoop(question, assistantNode) {
 function createAgentMemory(question) {
   return {
     question,
-    filters: {
-      channel: els.channel.value.trim(),
-      author: els.author.value.trim(),
-      after: els.after.value,
-      before: els.before.value,
-      attachments: els.attachments.checked,
-    },
+    filters: {},
     observations: [],
     searchResults: [],
     evidence: new Map(),
@@ -513,7 +500,7 @@ async function createWebLLMEngine(assistantNode) {
     return null;
   }
 
-  const selectedModel = els.webllmModel.value || DEFAULT_WEBLLM_MODEL;
+  const selectedModel = DEFAULT_WEBLLM_MODEL;
   if (state.webllmEngine && state.webllmModel === selectedModel) {
     return state.webllmEngine;
   }
@@ -542,7 +529,7 @@ function hasWebGPU() {
 }
 
 async function createTransformersGenerator(assistantNode) {
-  const selectedModel = els.transformersModel.value || DEFAULT_TRANSFORMERS_MODEL;
+  const selectedModel = DEFAULT_TRANSFORMERS_MODEL;
   if (state.transformersGenerator && state.transformersModel === selectedModel) {
     return state.transformersGenerator;
   }

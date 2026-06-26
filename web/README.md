@@ -14,13 +14,13 @@ Serve the repository root, then open `/web/`:
 python3 -m http.server 8080
 ```
 
-The page supports a chat interface, channel/author/date/attachment filters, Discord source links, and selected local attachment links. Each question runs a bounded agent loop before answering. The loop can make multiple tool calls, inspect observations, and stop when it has enough cited context.
+The page supports a chat interface, Discord source links, and selected local attachment links. Each question runs a bounded agent loop before answering. The loop can make multiple tool calls, inspect observations, and stop when it has enough cited context.
 
 Available browser tools:
 
 - `searchDiscord`: finds likely messages from the static lexical index.
 - `getConversationContext`: expands a promising message into same-channel surrounding conversation.
-- `getChannelRange`: reads a channel time range directly when the filters define one.
+- `getChannelRange`: reads a channel time range directly when the chat request identifies one.
 
 The answer engine can use:
 

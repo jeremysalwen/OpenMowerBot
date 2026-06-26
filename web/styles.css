@@ -16,11 +16,10 @@ body {
 .app {
   min-height: 100vh;
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto 1fr auto;
 }
 
 .topbar,
-.filters,
 .composer {
   background: #ffffff;
   border-color: #d8dee8;
@@ -51,23 +50,13 @@ h1 {
   font-size: 13px;
 }
 
-.model-controls,
-.filters {
+.model-controls {
   display: grid;
   gap: 8px;
 }
 
 .model-controls {
-  grid-template-columns: 140px 180px 190px;
-}
-
-.filters {
-  position: sticky;
-  top: 73px;
-  z-index: 2;
-  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 150px 150px auto;
-  padding: 10px 18px;
-  border-bottom: 1px solid #d8dee8;
+  grid-template-columns: 150px;
 }
 
 input,
@@ -109,18 +98,6 @@ button:disabled,
 textarea:disabled {
   opacity: 0.65;
   cursor: wait;
-}
-
-.check {
-  min-height: 40px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  border: 1px solid #b9c2d0;
-  border-radius: 6px;
-  background: #ffffff;
-  white-space: nowrap;
 }
 
 .transcript {
@@ -271,13 +248,8 @@ a:hover {
     grid-template-columns: 1fr;
   }
 
-  .model-controls,
-  .filters {
+  .model-controls {
     grid-template-columns: 1fr;
-  }
-
-  .filters {
-    position: static;
   }
 
   .composer {
