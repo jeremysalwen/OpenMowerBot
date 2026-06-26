@@ -14,4 +14,10 @@ Serve the repository root, then open `/web/`:
 python3 -m http.server 8080
 ```
 
-The page supports lexical search, channel/author/date/attachment filters, Discord source links, and selected local attachment links. The Answer button uses a browser-provided local language model when one is available; otherwise it falls back to ranked evidence.
+The page supports lexical search, channel/author/date/attachment filters, Discord source links, and selected local attachment links. The Answer button can use:
+
+- Chrome's built-in local LLM API when available.
+- WebLLM loaded from CDN with a browser-cached WebGPU model.
+- Evidence-only mode when no local LLM is available.
+
+WebLLM does not require built-in browser LLM support, but it does require WebGPU. The first model load downloads model artifacts and can take several minutes.

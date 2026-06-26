@@ -19,6 +19,17 @@
           <input id="author" type="text" autocomplete="off" placeholder="Author">
           <input id="after" type="date" aria-label="After date">
           <input id="before" type="date" aria-label="Before date">
+          <select id="engine" aria-label="Answer engine">
+            <option value="auto">Auto LLM</option>
+            <option value="webllm">WebLLM</option>
+            <option value="built-in">Built-in</option>
+            <option value="evidence">Evidence</option>
+          </select>
+          <select id="webllm-model" aria-label="WebLLM model">
+            <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B</option>
+            <option value="Qwen2-0.5B-Instruct-q4f16_1-MLC">Qwen2 0.5B</option>
+            <option value="Llama-3.2-3B-Instruct-q4f16_1-MLC">Llama 3.2 3B</option>
+          </select>
           <label class="check">
             <input id="attachments" type="checkbox">
             <span>Attachments</span>

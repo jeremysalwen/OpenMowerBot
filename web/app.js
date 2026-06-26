@@ -1,11 +1,17 @@
 const INDEX_ROOT = "../data/index/browser/";
+const WEBLLM_IMPORT_URL = "https://esm.run/@mlc-ai/web-llm";
+const DEFAULT_WEBLLM_MODEL = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
 const MAX_RESULTS = 40;
 const MAX_CANDIDATES = 600;
+const ANSWER_EVIDENCE_LIMIT = 12;
 
 const state = {
   manifest: null,
   termBuckets: new Map(),
   messageShards: new Map(),
+  webllm: null,
+  webllmEngine: null,
+  webllmModel: null,
 };
 
 const els = {
@@ -15,6 +21,8 @@ const els = {
   after: document.querySelector("#after"),
   before: document.querySelector("#before"),
   attachments: document.querySelector("#attachments"),
+  engine: document.querySelector("#engine"),
+  webllmModel: document.querySelector("#webllm-model"),
   search: document.querySelector("#search"),
   answer: document.querySelector("#answer"),
   summary: document.querySelector("#summary"),
@@ -153,6 +161,7 @@ function renderResults(results) {
 }
 
 async function runAnswer() {
+  els.answerPanel.hidden = true;
   setBusy(true);
   try {
     const results = await search();
@@ -162,15 +171,8 @@ async function runAnswer() {
       return;
     }
 
-    const prompt = buildAnswerPrompt(els.query.value, results.slice(0, 12).map((result) => result.message));
-    const model = await createBrowserModel();
-    if (!model) {
-      showAnswer("No local browser LLM API is available. Showing ranked evidence instead.");
-      setSummary(`${results.length} evidence results`);
-      return;
-    }
-
-    const answer = await promptModel(model, prompt);
+    const evidence = results.slice(0, ANSWER_EVIDENCE_LIMIT).map((result) => result.message);
+    const answer = await generateAnswer(els.query.value, evidence);
     showAnswer(answer);
     setSummary(`${results.length} evidence results`);
   } finally {
@@ -178,7 +180,48 @@ async function runAnswer() {
   }
 }
 
-async function createBrowserModel() {
+async function generateAnswer(question, evidence) {
+  const requested = els.engine.value;
+
+  if (requested === "evidence") {
+    return formatEvidenceOnly(evidence);
+  }
+
+  if (requested === "built-in" || requested === "auto") {
+    try {
+      const builtIn = await createBuiltInModel();
+      if (builtIn) {
+        setSummary("Answering with built-in browser LLM...");
+        return await promptBuiltInModel(builtIn, buildAnswerPrompt(question, evidence));
+      }
+    } catch (error) {
+      if (requested === "built-in") {
+        return `Built-in browser LLM failed: ${error.message}\n\n${formatEvidenceOnly(evidence)}`;
+      }
+    }
+    if (requested === "built-in") {
+      return "The built-in browser LLM API is not available. Showing ranked evidence instead.\n\n"
+        + formatEvidenceOnly(evidence);
+    }
+  }
+
+  if (requested === "webllm" || requested === "auto") {
+    try {
+      const webllm = await createWebLLMEngine();
+      if (webllm) {
+        setSummary("Answering with WebLLM...");
+        return await promptWebLLM(webllm, question, evidence);
+      }
+    } catch (error) {
+      return `WebLLM failed: ${error.message}\n\n${formatEvidenceOnly(evidence)}`;
+    }
+  }
+
+  return "No local browser LLM is available. Showing ranked evidence instead.\n\n"
+    + formatEvidenceOnly(evidence);
+}
+
+async function createBuiltInModel() {
   const api = globalThis.LanguageModel || globalThis.ai?.languageModel;
   if (!api) return null;
   if (typeof api.create === "function") return api.create();
@@ -186,10 +229,57 @@ async function createBrowserModel() {
   return null;
 }
 
-async function promptModel(model, prompt) {
+async function promptBuiltInModel(model, prompt) {
   if (typeof model.prompt === "function") return model.prompt(prompt);
   if (typeof model.generate === "function") return model.generate(prompt);
   throw new Error("The available browser model does not expose a prompt method.");
+}
+
+async function createWebLLMEngine() {
+  if (!("gpu" in navigator)) {
+    showAnswer("WebLLM requires WebGPU. Showing ranked evidence instead.");
+    return null;
+  }
+
+  const selectedModel = els.webllmModel.value || DEFAULT_WEBLLM_MODEL;
+  if (state.webllmEngine && state.webllmModel === selectedModel) {
+    return state.webllmEngine;
+  }
+
+  setSummary("Loading WebLLM...");
+  showAnswer("Loading WebLLM. The first model download can take several minutes and is cached by the browser.");
+
+  state.webllm = state.webllm || await import(WEBLLM_IMPORT_URL);
+  state.webllmModel = selectedModel;
+  state.webllmEngine = await state.webllm.CreateMLCEngine(selectedModel, {
+    initProgressCallback: (progress) => {
+      const text = progress?.text || "Loading WebLLM model...";
+      const percent = Number.isFinite(progress?.progress)
+        ? ` ${Math.round(progress.progress * 100)}%`
+        : "";
+      setSummary(`${text}${percent}`);
+      showAnswer(`${text}${percent}`);
+    },
+  });
+
+  return state.webllmEngine;
+}
+
+async function promptWebLLM(engine, question, evidence) {
+  const chunks = await engine.chat.completions.create({
+    messages: buildChatMessages(question, evidence),
+    temperature: 0.2,
+    max_tokens: 700,
+    stream: true,
+  });
+
+  let answer = "";
+  for await (const chunk of chunks) {
+    answer += chunk.choices[0]?.delta?.content || "";
+    showAnswer(answer);
+  }
+
+  return answer.trim() || "The local model returned an empty answer.";
 }
 
 function buildAnswerPrompt(question, messages) {
@@ -198,6 +288,39 @@ function buildAnswerPrompt(question, messages) {
   }).join("\n\n");
 
   return `Answer the question using only the Discord evidence below. Include source numbers and Discord links when useful.\n\nQuestion: ${question}\n\nEvidence:\n${evidence}`;
+}
+
+function buildChatMessages(question, evidence) {
+  return [
+    {
+      role: "system",
+      content: "Answer using only the provided Discord evidence. Cite source numbers and include Discord links when useful. If the evidence is insufficient, say so.",
+    },
+    {
+      role: "user",
+      content: `Question: ${question || "(no question provided)"}\n\nEvidence:\n${formatEvidenceForPrompt(evidence)}`,
+    },
+  ];
+}
+
+function formatEvidenceForPrompt(messages) {
+  return messages.map((message, index) => {
+    return [
+      `[${index + 1}]`,
+      `Time: ${message.t || "unknown"}`,
+      `Channel: #${message.ch || "unknown"}`,
+      `Author: ${message.a || "unknown"}`,
+      `URL: ${message.url || "none"}`,
+      `Text: ${message.text || ""}`,
+    ].join("\n");
+  }).join("\n\n");
+}
+
+function formatEvidenceOnly(messages) {
+  return messages.map((message, index) => {
+    const text = (message.text || "").replace(/\s+/g, " ").trim();
+    return `[${index + 1}] ${message.t || "unknown"} #${message.ch || "unknown"} ${message.a || "unknown"}\n${text}\n${message.url || ""}`;
+  }).join("\n\n");
 }
 
 function showAnswer(text) {

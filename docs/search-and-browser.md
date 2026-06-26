@@ -42,7 +42,7 @@ await answerEngine.generate({
 Potential adapters:
 
 - Chrome built-in Prompt API when available.
-- WebLLM for self-contained WebGPU browser inference.
+- WebLLM through `@mlc-ai/web-llm` for browsers with WebGPU but no built-in LLM API.
 - Local CLI adapter to call an agent/model available on the developer machine.
 - No-op adapter that returns ranked evidence only.
 
@@ -55,6 +55,8 @@ The static page should:
 3. Retrieve candidate messages from sharded lexical/vector indexes.
 4. Display evidence with channel, author, timestamp, and `messageUrl` links back to Discord.
 5. Optionally synthesize an answer through the selected local LLM adapter.
+
+The current static page supports Chrome built-in LLM APIs, WebLLM loaded from CDN, and evidence-only mode. WebLLM downloads model artifacts on first use and then uses the browser cache.
 
 Do not require a server process. Any preprocessing must happen before publishing.
 
