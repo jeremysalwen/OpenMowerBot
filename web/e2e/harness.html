@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>WebLLM probe harness</title></head>
+  <body>
+    <p id="status">loading…</p>
+    <script type="module">
+      import { CreateMLCEngine, prebuiltAppConfig } from "https://esm.run/@mlc-ai/web-llm";
+      let engine = null;
+      let current = null;
+      window.__progress = "";
+      window.__loadedModel = null;
+      window.__loadError = null;
+      // When true, use WebLLM's IndexedDB cache (stores ArrayBuffers) instead of
+      // the Cache API (stores Response objects). HF now 302-redirects shard URLs
+      // to the Xet CDN, and the Cache API cannot store redirected responses, so
+      // the default Cache-API path throws "Cache.add() encountered a network
+      // error". IndexedDB fetch→arrayBuffer→store is immune.
+      window.__useIDB = false;
+      window.__load = (model) => {
+        if (engine && current === model) { window.__loadedModel = model; return; }
+        window.__loadedModel = null;
+        window.__loadError = null;
+        document.getElementById("status").textContent = "loading " + model;
+        const opts = {
+          initProgressCallback: (p) => {
+            window.__progress = `${p.text || ""} ${Math.round((p.progress || 0) * 100)}%`;
+          },
+        };
+        if (window.__useIDB) {
+          opts.appConfig = { ...prebuiltAppConfig, cacheBackend: "indexeddb" };
+        }
+        CreateMLCEngine(model, opts).then((e) => {
+          engine = e;
+          current = model;
+          window.__loadedModel = model;
+          document.getElementById("status").textContent = "ready " + model;
+        }).catch((err) => { window.__loadError = String(err); });
+      };
+      // req: { messages, tools?, temperature?, max_tokens? }
+      window.__chat = async (req) => {
+        const r = await engine.chat.completions.create({
+          messages: req.messages,
+          tools: req.tools,
+          tool_choice: req.tools ? "auto" : undefined,
+          temperature: req.temperature ?? 0.2,
+          max_tokens: req.max_tokens ?? 1024,
+        });
+        const m = r.choices[0]?.message || {};
+        return { content: m.content || "", tool_calls: m.tool_calls || null };
+      };
+      window.__ready = true;
+    </script>
+  </body>
+</html>

@@ -1,22 +1,28 @@
+import { createStore } from "./index-store.js";
+import {
+  createTools,
+  runAgentTurn,
+  flattenMessages,
+  extractGeneratedText,
+  toManualConversation,
+} from "./agent.js";
+
 const INDEX_ROOT = "../data/index/browser/";
 const WEBLLM_IMPORT_URL = "https://esm.run/@mlc-ai/web-llm";
 const TRANSFORMERS_IMPORT_URL = "https://esm.run/@huggingface/transformers";
 const DEFAULT_WEBLLM_MODEL = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
-const DEFAULT_TRANSFORMERS_MODEL = "onnx-community/SmolLM2-135M-Instruct-ONNX-MHA";
-const APP_VERSION = "2026-06-26.9";
+// Qwen3-0.6B is the smallest Transformers.js model that reliably drives native
+// tool calling; the 135M/270M models are too small to call tools well.
+const DEFAULT_TRANSFORMERS_MODEL = "onnx-community/Qwen3-0.6B-ONNX";
+const APP_VERSION = "2026-06-26.10";
 // Optional build-time site config. The GitHub Pages deploy sets
 // attachmentsLocal:false because attachments are not published to Pages.
 const SITE_CONFIG = (typeof window !== "undefined" && window.DISCORD_HISTORY_CONFIG) || {};
-const MAX_RESULTS = 48;
-const MAX_CANDIDATES = 900;
-const CONTEXT_ORDINAL_SCAN = 2500;
-const AGENT_MAX_STEPS = 8;
 
 const state = {
+  store: null,
   manifest: null,
-  termBuckets: new Map(),
-  messageShards: new Map(),
-  seenById: new Map(),
+  tools: null,
   webllm: null,
   webllmEngine: null,
   webllmModel: null,
@@ -47,74 +53,18 @@ const els = {
 // in this browser's localStorage only; this is a static site with no backend.
 const STORE_KEY = "discord-history.settings";
 
-// Tool registry. Each tool is callable by the model. `usage`/`summary` are
-// rendered into the system prompt so the model knows what is available, and
-// `run` is the browser-side implementation backed by the static index.
-const TOOLS = {
-  search_messages: {
-    usage: "search_messages(query, channel?, author?, after?, before?, has_attachment?, limit?)",
-    summary: "Full-text search of Discord messages. Returns matching messages with id, timestamp, channel, author, and a snippet.",
-    async run(args) {
-      const results = await searchMessages({
-        query: String(args.query || ""),
-        channel: args.channel,
-        author: args.author,
-        after: args.after,
-        before: args.before,
-        attachments: args.has_attachment ?? args.attachments,
-        limit: clampNumber(args.limit, 12, 1, MAX_RESULTS),
-      });
-      return { messages: results.map((result) => result.message) };
-    },
-  },
-  get_context: {
-    usage: "get_context(message_id, minutes_before?, minutes_after?)",
-    summary: "Read the same-channel conversation surrounding a message id from a previous search hit, to understand it before trusting it.",
-    async run(args) {
-      const id = String(args.message_id ?? args.messageId ?? args.id ?? "");
-      const center = state.seenById.get(id);
-      if (!center) {
-        return { messages: [], error: `unknown message_id "${id}". Call search_messages first and use an id from the results.` };
-      }
-      const messages = await getConversationContext({
-        centerOrdinal: center.o,
-        centerTimestamp: center.t,
-        channelId: center.chId,
-        channelName: center.ch,
-        minutesBefore: clampNumber(args.minutes_before, 45, 1, 360),
-        minutesAfter: clampNumber(args.minutes_after, 45, 1, 360),
-        maxMessages: 16,
-      });
-      return { messages };
-    },
-  },
-  read_channel: {
-    usage: "read_channel(channel, after?, before?, author?, limit?)",
-    summary: "Read messages from a channel within a date range, in chronological order. Use when the question names a channel and time window.",
-    async run(args) {
-      const messages = await getChannelRange({
-        channel: args.channel,
-        after: args.after,
-        before: args.before,
-        author: args.author,
-        attachments: args.has_attachment ?? args.attachments,
-        limit: clampNumber(args.limit, 40, 1, 80),
-      });
-      return { messages };
-    },
-  },
-};
-
 init().catch((error) => {
   setSummary(error.message);
   appendNoticeMessage("The browser index could not be loaded.", error.message);
 });
 
 async function init() {
-  state.manifest = await fetchJson(`${INDEX_ROOT}manifest.json`);
+  state.store = createStore({ fetchJson, indexRoot: INDEX_ROOT });
+  state.manifest = await state.store.loadManifest();
+  state.tools = createTools(state.store);
   setSummary(statusText("Ready"));
   appendNoticeMessage(
-    "Ask a question about the OpenMower Discord history. I'll call search tools as needed and answer with cited sources shown in the Sources panel.",
+    "Ask a question about the OpenMower Discord history. I'll search the archive and answer with cited sources shown in the Sources panel.",
     "Tip: for the most capable answers, clone the repo and run an agent CLI (Claude Code or Codex) inside the directory and ask there. AGENTS.md teaches it to use the bundled search tools. This page is the no-install option.",
   );
   renderActiveSources();
@@ -151,7 +101,7 @@ async function submitQuestion() {
   setActiveTurn(turn);
 
   try {
-    await runAgentTurn(question, turn);
+    await answerQuestion(question, turn);
   } catch (error) {
     setTurnStatus(turn, `Error: ${error.message}`);
     setAnswer(turn, `Something went wrong while answering: ${error.message}`);
@@ -161,9 +111,9 @@ async function submitQuestion() {
   }
 }
 
-// --- Model-driven tool-calling agent ----------------------------------------
+// --- Turn driver: wires the shared agent to the DOM -------------------------
 
-async function runAgentTurn(question, turn) {
+async function answerQuestion(question, turn) {
   setTurnStatus(turn, "Loading the answer model...");
   const engine = await resolveEngine((text) => setTurnStatus(turn, text));
 
@@ -172,259 +122,59 @@ async function runAgentTurn(question, turn) {
     return;
   }
 
-  const conversation = [
-    { role: "system", content: systemPrompt() },
-    { role: "user", content: question },
-  ];
-  const calledSignatures = new Set();
+  // Test instrumentation: a headless run can read the last turn's engine,
+  // tool calls, answer, and source count without scraping the DOM. Harmless
+  // in production (just a record of what already happened on screen).
+  const probe = { engine: engine.label, question, toolCalls: [], modelOutputs: [], observations: [], answer: null, sources: 0, done: false };
+  if (typeof window !== "undefined") window.__ombLastRun = probe;
 
-  for (let step = 1; step <= AGENT_MAX_STEPS; step += 1) {
-    setSummary(`${engine.label}: step ${step}/${AGENT_MAX_STEPS}...`);
-    setTurnStatus(turn, "Thinking...");
-
-    const raw = await engine.chat(conversation, {
-      onDelta: (text) => setTurnStatus(turn, `Thinking: ${tail(text)}`),
-    });
-    conversation.push({ role: "assistant", content: raw });
-
-    const parsed = parseAgentOutput(raw);
-    if (parsed.kind === "answer") {
-      setAnswer(turn, parsed.answer);
-      setSummary(statusText(`Answered in ${step} step${step === 1 ? "" : "s"}, ${turn.list.length} sources`));
-      return;
-    }
-
-    const tool = TOOLS[parsed.tool];
-    if (!tool) {
-      renderToolCall(turn, parsed.tool, parsed.arguments, "error", 0);
-      conversation.push({
-        role: "user",
-        content: `Observation: unknown tool "${parsed.tool}". Available tools: ${Object.keys(TOOLS).join(", ")}. Reply with one JSON object.`,
-      });
-      continue;
-    }
-
-    const signature = `${parsed.tool}:${stableStringify(parsed.arguments)}`;
-    if (calledSignatures.has(signature)) {
-      conversation.push({
-        role: "user",
-        content: "Observation: you already ran that exact call. Try different arguments or give your final answer.",
-      });
-      continue;
-    }
-    calledSignatures.add(signature);
-
-    const card = renderToolCall(turn, parsed.tool, parsed.arguments, "running", 0);
-    let result;
-    try {
-      result = await tool.run(parsed.arguments || {});
-    } catch (error) {
-      result = { messages: [], error: error.message };
-    }
-
-    const numbered = registerEvidence(turn, result.messages || []);
-    renderActiveSources();
-    renderToolCall(turn, parsed.tool, parsed.arguments, result.error ? "error" : "done", numbered.length, card);
-    conversation.push({ role: "user", content: formatObservation(parsed.tool, numbered, result) });
-  }
-
-  // Budget exhausted: force a final answer from whatever was gathered.
-  setTurnStatus(turn, "Composing final answer...");
-  conversation.push({
-    role: "user",
-    content: 'You have reached the tool-call limit. Give your final answer now as {"answer": "..."} citing the source numbers you have.',
+  const result = await runAgentTurn({
+    question,
+    engine,
+    tools: state.tools,
+    hooks: {
+      setStatus: (text) => setTurnStatus(turn, text),
+      setSummary,
+      startToolCall: (toolName, args) => {
+        probe.toolCalls.push({ name: toolName, args });
+        return renderToolCall(turn, toolName, args, "running", 0);
+      },
+      onModelOutput: (text, step) => probe.modelOutputs.push({ step, text }),
+      onObservation: (text) => probe.observations.push(text),
+      finishToolCall: (card, toolName, args, status, count) =>
+        renderToolCall(turn, toolName, args, status, count, card),
+      onEvidence: (list) => {
+        turn.list = list;
+        renderActiveSources();
+      },
+      onAnswer: (text, list) => {
+        turn.list = list;
+        setAnswer(turn, text);
+      },
+    },
   });
-  const raw = await engine.chat(conversation, {
-    onDelta: (text) => setTurnStatus(turn, `Thinking: ${tail(text)}`),
-  });
-  const parsed = parseAgentOutput(raw);
-  setAnswer(turn, parsed.kind === "answer" ? parsed.answer : stripJsonWrapper(raw));
-  setSummary(statusText(`Answered (tool budget reached), ${turn.list.length} sources`));
+
+  probe.answer = result?.answer ?? null;
+  probe.sources = result?.evidence?.length ?? turn.list.length;
+  probe.done = true;
 }
 
 async function runEvidenceOnlyTurn(question, turn) {
   setTurnStatus(turn, "No browser LLM available; searching the index...");
   const card = renderToolCall(turn, "search_messages", { query: question }, "running", 0);
-  const result = await TOOLS.search_messages.run({ query: question, limit: 16 });
-  const numbered = registerEvidence(turn, result.messages || []);
+  const result = await state.tools.search_messages.run({ query: question, limit: 16 });
+  const messages = result.messages || [];
+  turn.list = messages;
   renderActiveSources();
-  renderToolCall(turn, "search_messages", { query: question }, "done", numbered.length, card);
+  renderToolCall(turn, "search_messages", { query: question }, "done", messages.length, card);
 
-  const answer = numbered.length > 0
+  const answer = messages.length > 0
     ? "No browser LLM is selected or available, so I can't compose a written answer. The top matching messages are listed in the Sources panel "
-      + numbered.map((entry) => `[${entry.n}]`).join("")
+      + messages.map((_, index) => `[${index + 1}]`).join("")
       + "."
     : "No browser LLM is available and the search found no matching messages. Try different terms.";
   setAnswer(turn, answer);
   setSummary(statusText(`Evidence only, ${turn.list.length} sources`));
-}
-
-function systemPrompt() {
-  const tools = Object.values(TOOLS)
-    .map((tool) => `- ${tool.usage}\n  ${tool.summary}`)
-    .join("\n");
-
-  return [
-    "You are an assistant for the OpenMower Discord history archive.",
-    "Answer the user's question using only evidence you retrieve with the tools below. Do not rely on outside knowledge for specifics.",
-    "",
-    "Work one step at a time. On every step output a SINGLE JSON object and nothing else.",
-    "To call a tool:",
-    '  {"tool": "<name>", "arguments": { ... }}',
-    'You then receive an "Observation" listing numbered messages such as [1], [2].',
-    "When you have enough evidence, output your final answer:",
-    '  {"answer": "<answer text that cites sources like [1][2]>"}',
-    "",
-    "Guidance:",
-    "- Search before answering specific questions; refine terms if the first search is weak.",
-    "- Use get_context on a promising search hit to read the surrounding conversation before trusting it.",
-    "- Cite every factual claim with the bracketed source numbers from the observations.",
-    "- Source numbers are stable for the whole conversation; reuse the same number for the same message.",
-    "- If the evidence does not answer the question, say so plainly in the answer.",
-    "",
-    "Tools:",
-    tools,
-  ].join("\n");
-}
-
-function parseAgentOutput(raw) {
-  const obj = extractJsonObject(raw);
-  if (obj && typeof obj === "object") {
-    const toolName = normalizeToolName(obj.tool ?? obj.action ?? obj.name ?? obj.tool_name);
-    const answer = firstDefined(obj.answer, obj.final, obj.final_answer, obj.response, obj.reply);
-
-    if (toolName && TOOLS[toolName]) {
-      return {
-        kind: "tool",
-        tool: toolName,
-        arguments: obj.arguments ?? obj.args ?? obj.input ?? obj.parameters ?? {},
-      };
-    }
-    if (answer != null) {
-      return { kind: "answer", answer: String(answer).trim() };
-    }
-    if (toolName) {
-      // Looks like a tool call for an unknown tool; surface the name.
-      return { kind: "tool", tool: toolName, arguments: obj.arguments ?? obj.args ?? {} };
-    }
-  }
-
-  // No usable JSON: treat the whole output as a direct prose answer.
-  return { kind: "answer", answer: stripJsonWrapper(raw) };
-}
-
-function normalizeToolName(name) {
-  if (!name) return null;
-  const key = String(name).trim().toLowerCase().replace(/[\s-]+/g, "_");
-  const aliases = {
-    search: "search_messages",
-    search_discord: "search_messages",
-    searchmessages: "search_messages",
-    messages: "search_messages",
-    context: "get_context",
-    getcontext: "get_context",
-    conversation: "get_context",
-    channel: "read_channel",
-    readchannel: "read_channel",
-    channel_range: "read_channel",
-  };
-  if (TOOLS[key]) return key;
-  return aliases[key] || key;
-}
-
-function extractJsonObject(raw) {
-  const text = String(raw || "");
-
-  // Prefer fenced ```json blocks.
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidates = [];
-  if (fenced) candidates.push(fenced[1]);
-
-  // Then scan for balanced top-level brace groups.
-  for (const group of scanBraceGroups(text)) candidates.push(group);
-
-  for (const candidate of candidates) {
-    const parsed = tryParseJson(candidate);
-    if (parsed && typeof parsed === "object") return parsed;
-  }
-  return null;
-}
-
-function scanBraceGroups(text) {
-  const groups = [];
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escape = false;
-
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i];
-    if (inString) {
-      if (escape) escape = false;
-      else if (char === "\\") escape = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-    } else if (char === "{") {
-      if (depth === 0) start = i;
-      depth += 1;
-    } else if (char === "}") {
-      depth -= 1;
-      if (depth === 0 && start >= 0) {
-        groups.push(text.slice(start, i + 1));
-        start = -1;
-      }
-    }
-  }
-  return groups;
-}
-
-function tryParseJson(text) {
-  const trimmed = String(text).trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    // Tolerate trailing commas and single quotes from small models.
-    try {
-      const relaxed = trimmed
-        .replace(/,\s*([}\]])/g, "$1")
-        .replace(/'/g, '"');
-      return JSON.parse(relaxed);
-    } catch {
-      return null;
-    }
-  }
-}
-
-function stripJsonWrapper(raw) {
-  const text = String(raw || "").trim();
-  const obj = extractJsonObject(text);
-  const answer = obj && firstDefined(obj.answer, obj.final, obj.final_answer, obj.response, obj.reply);
-  if (answer != null) return String(answer).trim();
-  return text
-    .replace(/```(?:json)?/gi, "")
-    .replace(/```/g, "")
-    .trim() || "The model returned an empty answer.";
-}
-
-function formatObservation(toolName, numbered, result) {
-  if (result.error) {
-    return `Observation (${toolName}): ${result.error}`;
-  }
-  if (numbered.length === 0) {
-    return `Observation (${toolName}): no messages found. Try different search terms or filters.`;
-  }
-
-  const lines = [`Observation (${toolName}): ${numbered.length} message(s)`];
-  for (const { n, message } of numbered) {
-    lines.push(
-      `[${n}] id=${message.id} | ${formatDate(message.t)} | #${message.ch || "unknown"} | ${message.a || "unknown"}`,
-    );
-    lines.push(shorten(message.text || "(no text)", 260));
-  }
-  return lines.join("\n");
 }
 
 // --- Engine abstraction -----------------------------------------------------
@@ -457,8 +207,10 @@ async function loadEngine(kind, mode, note) {
     if (!model) return null;
     return {
       label: "Built-in browser model",
+      // No native tool calling; returns prose that the agent parses for any
+      // JSON-shaped tool call the model happens to emit.
       async chat(messages) {
-        return promptBuiltInModel(model, flattenMessages(messages));
+        return { text: await promptBuiltInModel(model, flattenMessages(messages)) };
       },
     };
   }
@@ -466,21 +218,38 @@ async function loadEngine(kind, mode, note) {
   if (kind === "webllm") {
     const engine = await createWebLLMEngine(mode.webllmModel, note);
     if (!engine) return null;
+    // WebLLM only accepts the OpenAI `tools` param for an allow-list of
+    // function-calling models (the Hermes family). For every other WebLLM
+    // model we fall back to the manual prompt+parse protocol, the same text
+    // path the Transformers.js engine uses.
+    const native = supportsWebLLMTools(state.webllmModel);
+    const complete = (request) => guardWebLLM(engine.chat.completions.create(request));
     return {
-      label: `WebLLM ${state.webllmModel}`,
-      async chat(messages, { onDelta } = {}) {
-        const chunks = await engine.chat.completions.create({
-          messages,
-          temperature: 0.2,
-          max_tokens: 800,
-          stream: true,
-        });
-        let out = "";
-        for await (const chunk of chunks) {
-          out += chunk.choices[0]?.delta?.content || "";
-          onDelta?.(out);
+      label: `WebLLM ${state.webllmModel}${native ? "" : " (manual tools)"}`,
+      async chat(messages, { tools } = {}) {
+        if (native && tools) {
+          const response = await complete({
+            messages,
+            tools,
+            tool_choice: "auto",
+            temperature: 0.2,
+            max_tokens: 1024,
+          });
+          const message = response.choices[0]?.message || {};
+          const toolCalls = (message.tool_calls || []).map((call) => ({
+            name: call.function?.name,
+            arguments: parseJsonArgs(call.function?.arguments),
+          }));
+          return { content: message.content || "", toolCalls };
         }
-        return out.trim();
+        // Manual mode: describe tools in the prompt, flatten tool/assistant
+        // messages the Llama/Qwen templates can't take, and parse the text.
+        const response = await complete({
+          messages: tools ? toManualConversation(messages, tools) : messages,
+          temperature: 0.2,
+          max_tokens: 1024,
+        });
+        return { text: response.choices[0]?.message?.content || "" };
       },
     };
   }
@@ -490,14 +259,19 @@ async function loadEngine(kind, mode, note) {
     if (!generator) return null;
     return {
       label: `Transformers.js ${state.transformersModel}`,
-      async chat(messages) {
+      // Tools are rendered into the chat template; the model emits its native
+      // tool-call markup as text, which the agent parses. The larger budget
+      // leaves room for reasoning models (Qwen3) to think and still call a
+      // tool. No repetition penalty: it suppresses the tool-call tokens (which
+      // also appear in the rendered prompt) and does not rescue the tiny models.
+      async chat(messages, { tools } = {}) {
         const result = await generator(messages, {
-          max_new_tokens: 512,
-          temperature: 0.2,
+          tools,
+          max_new_tokens: 1024,
           do_sample: false,
           return_full_text: false,
         });
-        return extractGeneratedText(result).trim();
+        return { text: extractGeneratedText(result).trim() };
       },
     };
   }
@@ -512,7 +286,9 @@ async function loadEngine(kind, mode, note) {
 // Hosted OpenAI-compatible chat completions engine. Works with OpenAI,
 // OpenRouter, Groq, Together, Anthropic's compatibility endpoint, and local
 // servers (Ollama/LM Studio/llama.cpp). The request goes directly from the
-// browser to the chosen endpoint; that endpoint must allow CORS.
+// browser to the chosen endpoint; that endpoint must allow CORS. Tools are
+// driven through the same manual prompt+parse protocol the local text engines
+// use, so the model emits <tool_call> markup the agent parses.
 function createApiEngine(config) {
   const baseUrl = (config.baseUrl || "").replace(/\/+$/, "");
   const model = config.model || "";
@@ -522,8 +298,10 @@ function createApiEngine(config) {
 
   return {
     label: `API ${model}`,
-    async chat(messages, { onDelta } = {}) {
-      return openAiChat({ baseUrl, model, apiKey, messages, onDelta });
+    async chat(messages, { tools, onDelta } = {}) {
+      const convo = tools ? toManualConversation(messages, tools) : messages;
+      const text = await openAiChat({ baseUrl, model, apiKey, messages: convo, onDelta });
+      return { text };
     },
   };
 }
@@ -581,11 +359,13 @@ async function openAiChat({ baseUrl, model, apiKey, messages, onDelta }) {
   return out.trim();
 }
 
-function flattenMessages(messages) {
-  const body = messages
-    .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
-    .join("\n\n");
-  return `${body}\n\nASSISTANT:`;
+function parseJsonArgs(value) {
+  if (value && typeof value === "object") return value;
+  try {
+    return JSON.parse(String(value || "{}"));
+  } catch {
+    return {};
+  }
 }
 
 function selectedAnswerMode() {
@@ -684,7 +464,14 @@ async function createWebLLMEngine(modelName, note) {
   note?.("Loading WebLLM. The first model download can take several minutes and is cached by the browser.");
   state.webllm = state.webllm || await import(WEBLLM_IMPORT_URL);
   state.webllmModel = selectedModel;
+  // Cache weights in IndexedDB, not the Cache API. HuggingFace now 302-redirects
+  // shard URLs to its Xet CDN, and the Cache API cannot store a redirected
+  // response, so the default Cache backend throws "Cache.add() encountered a
+  // network error" on the first shard. IndexedDB (fetch→arrayBuffer→store) is
+  // immune. Verified against fresh 1B/3B downloads in web/e2e/test-idb-cache.mjs.
+  const appConfig = { ...state.webllm.prebuiltAppConfig, cacheBackend: "indexeddb" };
   state.webllmEngine = await state.webllm.CreateMLCEngine(selectedModel, {
+    appConfig,
     initProgressCallback: (progress) => {
       const percent = Number.isFinite(progress?.progress) ? ` ${Math.round(progress.progress * 100)}%` : "";
       const text = `${progress?.text || "Loading WebLLM model..."}${percent}`;
@@ -698,6 +485,35 @@ async function createWebLLMEngine(modelName, note) {
 
 function hasWebGPU() {
   return Boolean(globalThis.navigator?.gpu);
+}
+
+// WebLLM accepts the OpenAI `tools` param only for these function-calling
+// models; all others throw "not supported for ChatCompletionRequest.tools".
+function supportsWebLLMTools(modelName) {
+  return /^Hermes-/i.test(modelName || "");
+}
+
+// A large model (e.g. Llama 3.2 3B) can exhaust GPU memory or exceed the OS GPU
+// watchdog (Windows TDR), losing the WebGPU device. WebLLM then disposes the
+// engine, so it can never recover and every later call throws "Object has
+// already been disposed". Detect that, drop the dead engine so the next attempt
+// reloads, and surface a clear, actionable message instead of a raw stack.
+async function guardWebLLM(promise) {
+  try {
+    return await promise;
+  } catch (error) {
+    const text = String(error?.message || error);
+    if (/device.*lost|device.*hung|already been disposed|GPUDevice|out of memory|DXGI/i.test(text)) {
+      const model = state.webllmModel;
+      state.webllmEngine = null;
+      state.webllmModel = null;
+      throw new Error(
+        `The GPU ran out of resources running ${model || "this model"} and the WebGPU device was lost. `
+        + "Try a smaller model (e.g. Llama 3.2 1B) or close other GPU-heavy tabs, then ask again.",
+      );
+    }
+    throw error;
+  }
 }
 
 async function createTransformersGenerator(modelName, note) {
@@ -724,153 +540,7 @@ async function createTransformersGenerator(modelName, note) {
   return state.transformersGenerator;
 }
 
-function extractGeneratedText(result) {
-  if (typeof result === "string") return result;
-  if (Array.isArray(result)) {
-    return result.map(extractGeneratedText).filter(Boolean).join("\n");
-  }
-  if (result && typeof result.generated_text === "string") {
-    return result.generated_text;
-  }
-  if (result && Array.isArray(result.generated_text)) {
-    return result.generated_text
-      .map((message) => message?.content || "")
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
-}
-
-// --- Tool implementations (static index access) -----------------------------
-
-async function searchMessages(args) {
-  const terms = tokenize(args.query);
-  const scores = new Map();
-
-  if (terms.length === 0) {
-    for (let ordinal = state.manifest.messageCount - 1; ordinal >= 0 && scores.size < MAX_CANDIDATES; ordinal -= 1) {
-      scores.set(ordinal, 0);
-    }
-  } else {
-    for (const term of terms) {
-      const postings = await postingsForTerm(term);
-      const weight = term.includes(".") || term.includes("_") || term.includes("-") ? 2 : 1;
-      for (const ordinal of postings) {
-        scores.set(ordinal, (scores.get(ordinal) || 0) + weight);
-      }
-    }
-  }
-
-  const candidates = [...scores.entries()]
-    .sort((left, right) => right[1] - left[1] || right[0] - left[0])
-    .slice(0, MAX_CANDIDATES);
-
-  const messages = [];
-  for (const [ordinal, score] of candidates) {
-    const message = await messageForOrdinal(ordinal);
-    if (message && matchesFilters(message, args)) {
-      messages.push({ message, score });
-    }
-    if (messages.length >= (args.limit || MAX_RESULTS)) break;
-  }
-
-  return messages;
-}
-
-async function getConversationContext(args) {
-  const centerTime = Date.parse(args.centerTimestamp || 0);
-  if (!Number.isFinite(centerTime)) return [];
-
-  const fromTime = centerTime - args.minutesBefore * 60 * 1000;
-  const toTime = centerTime + args.minutesAfter * 60 * 1000;
-  const start = Math.max(0, args.centerOrdinal - CONTEXT_ORDINAL_SCAN);
-  const end = Math.min(state.manifest.messageCount - 1, args.centerOrdinal + CONTEXT_ORDINAL_SCAN);
-  const matches = [];
-
-  for (let ordinal = start; ordinal <= end; ordinal += 1) {
-    const message = await messageForOrdinal(ordinal);
-    if (!message) continue;
-    if (!sameChannel(message, args)) continue;
-
-    const messageTime = Date.parse(message.t || 0);
-    if (!Number.isFinite(messageTime)) continue;
-    if (messageTime < fromTime || messageTime > toTime) continue;
-
-    matches.push({ message, distance: Math.abs(messageTime - centerTime) });
-  }
-
-  return matches
-    .sort((left, right) => left.distance - right.distance)
-    .slice(0, args.maxMessages)
-    .map((entry) => entry.message)
-    .sort((left, right) => Date.parse(left.t || 0) - Date.parse(right.t || 0));
-}
-
-async function getChannelRange(args) {
-  const after = args.after ? Date.parse(args.after) : Number.NEGATIVE_INFINITY;
-  const before = args.before ? Date.parse(`${args.before}T23:59:59`) : Number.POSITIVE_INFINITY;
-  const messages = [];
-
-  for (let ordinal = 0; ordinal < state.manifest.messageCount; ordinal += 1) {
-    const message = await messageForOrdinal(ordinal);
-    if (!message) continue;
-    if (args.channel && !includes(message.ch, args.channel) && message.chId !== args.channel) continue;
-    if (args.author && !includes(message.a, args.author) && message.aId !== args.author) continue;
-    if (args.attachments && (!message.at || message.at.length === 0)) continue;
-
-    const messageTime = Date.parse(message.t || 0);
-    if (!Number.isFinite(messageTime) || messageTime < after || messageTime > before) continue;
-    messages.push(message);
-    if (messages.length >= (args.limit || 80)) break;
-  }
-
-  return messages;
-}
-
-function sameChannel(message, args) {
-  if (args.channelId && message.chId) return message.chId === args.channelId;
-  return message.ch === args.channelName;
-}
-
-async function postingsForTerm(term) {
-  const bucket = termBucket(term);
-  const terms = await loadTermBucket(bucket);
-  return terms[term] || [];
-}
-
-async function loadTermBucket(bucket) {
-  if (!state.termBuckets.has(bucket)) {
-    const bucketInfo = state.manifest.termBuckets.find((entry) => entry.bucket === bucket);
-    state.termBuckets.set(bucket, bucketInfo ? await fetchJson(`${INDEX_ROOT}${bucketInfo.file}`) : {});
-  }
-  return state.termBuckets.get(bucket);
-}
-
-async function messageForOrdinal(ordinal) {
-  const shardIndex = Math.floor(ordinal / state.manifest.messageShardSize);
-  if (!state.messageShards.has(shardIndex)) {
-    const shard = state.manifest.messageShards.find((entry) => entry.index === shardIndex);
-    if (!shard) return null;
-    const records = await fetchJson(`${INDEX_ROOT}${shard.file}`);
-    state.messageShards.set(shardIndex, records);
-    for (const record of records) {
-      if (record && record.id != null) state.seenById.set(String(record.id), record);
-    }
-  }
-
-  return state.messageShards.get(shardIndex).find((message) => message.o === ordinal) || null;
-}
-
-function matchesFilters(message, args) {
-  if (args.channel && !includes(message.ch, args.channel)) return false;
-  if (args.author && !includes(message.a, args.author)) return false;
-  if (args.after && Date.parse(message.t || 0) < Date.parse(args.after)) return false;
-  if (args.before && Date.parse(message.t || 0) > Date.parse(`${args.before}T23:59:59`)) return false;
-  if (args.attachments && (!message.at || message.at.length === 0)) return false;
-  return true;
-}
-
-// --- Per-turn evidence ------------------------------------------------------
+// --- Per-turn rendering -----------------------------------------------------
 
 function createTurn() {
   const node = messageShell("assistant");
@@ -886,27 +556,11 @@ function createTurn() {
   node.append(status, trace);
   els.transcript.append(node);
 
-  const turn = { node, statusEl: status, traceEl: trace, bodyEl: null, list: [], byId: new Map() };
+  const turn = { node, statusEl: status, traceEl: trace, bodyEl: null, list: [] };
   node.addEventListener("click", () => setActiveTurn(turn));
   state.turns.push(turn);
   scrollTranscript();
   return turn;
-}
-
-function registerEvidence(turn, messages) {
-  const out = [];
-  for (const message of messages) {
-    if (!message || message.id == null) continue;
-    const id = String(message.id);
-    let n = turn.byId.get(id);
-    if (!n) {
-      turn.list.push(message);
-      n = turn.list.length;
-      turn.byId.set(id, n);
-    }
-    out.push({ n, message });
-  }
-  return out;
 }
 
 function setActiveTurn(turn) {
@@ -917,8 +571,6 @@ function setActiveTurn(turn) {
   }
   renderActiveSources();
 }
-
-// --- Rendering: transcript --------------------------------------------------
 
 function appendUserMessage(text) {
   const node = messageShell("user");
@@ -1017,7 +669,7 @@ function formatArgs(args) {
   return entries.map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`).join(" | ");
 }
 
-// --- Rendering: sources side panel ------------------------------------------
+// --- Sources side panel -----------------------------------------------------
 
 function renderActiveSources() {
   const turn = state.activeTurn;
@@ -1079,7 +731,7 @@ function focusSource(n) {
   card.classList.add("flash");
 }
 
-// --- Small DOM helpers ------------------------------------------------------
+// --- Small DOM + misc helpers ----------------------------------------------
 
 function messageShell(role) {
   const node = document.createElement("article");
@@ -1116,23 +768,6 @@ function link(text, href) {
   return element;
 }
 
-// --- Misc helpers -----------------------------------------------------------
-
-function tokenize(input) {
-  return String(input)
-    .toLowerCase()
-    .split(/[^a-z0-9_#.-]+/i)
-    .map((term) => term.trim())
-    .filter((term) => term.length >= 2);
-}
-
-function termBucket(term) {
-  const first = term[0] || "_";
-  if (first >= "0" && first <= "9") return "0-9";
-  if (first >= "a" && first <= "z") return first;
-  return "_";
-}
-
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Failed to load ${url}: HTTP ${response.status}`);
@@ -1157,35 +792,6 @@ function showError(error) {
   setSummary(error.message);
   appendNoticeMessage("Something went wrong while answering.", error.message);
   setBusy(false);
-}
-
-function includes(value, query) {
-  return String(value || "").toLowerCase().includes(String(query).toLowerCase());
-}
-
-function clampNumber(value, fallback, min, max) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.min(max, Math.max(min, Math.round(number)));
-}
-
-function firstDefined(...values) {
-  for (const value of values) {
-    if (value !== undefined && value !== null) return value;
-  }
-  return undefined;
-}
-
-function stableStringify(value) {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return `{${Object.keys(value).sort().map((key) => `${key}:${stableStringify(value[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function tail(text, max = 160) {
-  const cleaned = String(text || "").replace(/\s+/g, " ").trim();
-  return cleaned.length <= max ? cleaned : `...${cleaned.slice(cleaned.length - max)}`;
 }
 
 function shorten(text, maxLength) {

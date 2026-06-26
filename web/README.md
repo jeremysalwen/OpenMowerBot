@@ -36,12 +36,20 @@ links then fall back to the original Discord CDN URLs.
 
 ## How it works
 
-The page is a plain tool-calling agent. There is no hard-coded retrieval
-strategy: the selected local LLM drives the conversation and decides, step by
-step, which tool to call and with what arguments. Each step the model emits a
-single JSON object — either a tool call or a final answer — and the loop feeds
-the tool results back as observations until the model answers (or the tool-call
-budget is reached).
+The page is a tool-calling agent built on each engine's **native** function
+calling. Tools are given to the model through the chat template (WebLLM uses
+OpenAI-style `tools`/`tool_calls`; Transformers.js renders the tools into the
+template and the model emits its native tool-call markup, e.g. Qwen's
+`<tool_call>…</tool_call>`). There is no hard-coded retrieval strategy: the
+selected local LLM decides, step by step, which tool to call and with what
+arguments. The loop feeds each tool's results back as a `tool` message — with
+numbered, citable sources — until the model answers (or the tool-call budget is
+reached).
+
+The agent code lives in `agent.js` (model protocol and loop) and
+`index-store.js` (static-index access); both are DOM-free and unit-tested in
+`agent.test.mjs` (`node --test web/agent.test.mjs`). `app.js` is the browser
+glue (engine loading and rendering).
 
 Tools exposed to the model:
 
@@ -87,6 +95,19 @@ built-in browser LLM support, but it does require WebGPU. Firefox builds without
 WebGPU should use Auto or a Transformers.js model. The first model load
 downloads model artifacts and can take several minutes.
 
-Note that small local models are not always reliable at producing well-formed
-tool calls; the loop tolerates fenced JSON, minor formatting slips, and plain
-prose answers, but larger models follow the protocol more consistently.
+Model reliability for native tool calling varies a lot by size:
+
+- **Qwen3 0.6B** (Transformers.js) is the smallest model that reliably calls
+  tools and grounds its answer; it is the default and recommended WASM model.
+  Give reasoning models room — the loop allows a large token budget so the
+  model can think *and* still emit the tool call.
+- **WebLLM** models (Llama 3.2 1B/3B, Qwen2 0.5B) use grammar-constrained
+  decoding for structured tool calls and are generally reliable; the 3B model
+  is the strongest option when WebGPU is available.
+- **SmolLM2 135M** and **Gemma 3 270M** are too small to drive tool calls
+  consistently (they tend to narrate intent or loop) and are kept only as
+  low-resource fallbacks.
+
+The output handling tolerates `<tool_call>` tags, bare/fenced JSON, reasoning
+(`<think>`) blocks, and placeholder argument values, but it cannot make a model
+that won't call a tool call one.
