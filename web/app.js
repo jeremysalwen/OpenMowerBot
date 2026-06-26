@@ -31,6 +31,10 @@ const state = {
 const els = {
   query: document.querySelector("#query"),
   answerMode: document.querySelector("#answer-mode"),
+  apiSettings: document.querySelector("#api-settings"),
+  apiBaseUrl: document.querySelector("#api-base-url"),
+  apiModel: document.querySelector("#api-model"),
+  apiKey: document.querySelector("#api-key"),
   composer: document.querySelector("#composer"),
   send: document.querySelector("#send"),
   summary: document.querySelector("#summary"),
@@ -38,6 +42,10 @@ const els = {
   sourcesList: document.querySelector("#sources-list"),
   sourcesEmpty: document.querySelector("#sources-empty"),
 };
+
+// Persisted UI settings (answer model + hosted API config). The API key is kept
+// in this browser's localStorage only; this is a static site with no backend.
+const STORE_KEY = "discord-history.settings";
 
 // Tool registry. Each tool is callable by the model. `usage`/`summary` are
 // rendered into the system prompt so the model knows what is available, and
@@ -107,8 +115,10 @@ async function init() {
   setSummary(statusText("Ready"));
   appendNoticeMessage(
     "Ask a question about the OpenMower Discord history. I'll call search tools as needed and answer with cited sources shown in the Sources panel.",
+    "Tip: for the most capable answers, clone the repo and run an agent CLI (Claude Code or Codex) inside the directory and ask there. AGENTS.md teaches it to use the bundled search tools. This page is the no-install option.",
   );
   renderActiveSources();
+  initSettings();
 
   els.composer.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -492,7 +502,83 @@ async function loadEngine(kind, mode, note) {
     };
   }
 
+  if (kind === "api") {
+    return createApiEngine(mode.api || apiConfig());
+  }
+
   return null;
+}
+
+// Hosted OpenAI-compatible chat completions engine. Works with OpenAI,
+// OpenRouter, Groq, Together, Anthropic's compatibility endpoint, and local
+// servers (Ollama/LM Studio/llama.cpp). The request goes directly from the
+// browser to the chosen endpoint; that endpoint must allow CORS.
+function createApiEngine(config) {
+  const baseUrl = (config.baseUrl || "").replace(/\/+$/, "");
+  const model = config.model || "";
+  const apiKey = config.apiKey || "";
+  if (!baseUrl) throw new Error("Enter an API base URL (for example https://api.openai.com/v1).");
+  if (!model) throw new Error("Enter an API model name (for example gpt-4o-mini).");
+
+  return {
+    label: `API ${model}`,
+    async chat(messages, { onDelta } = {}) {
+      return openAiChat({ baseUrl, model, apiKey, messages, onDelta });
+    },
+  };
+}
+
+async function openAiChat({ baseUrl, model, apiKey, messages, onDelta }) {
+  const headers = { "content-type": "application/json" };
+  if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+  // Anthropic's OpenAI-compatible endpoint needs this header for browser calls.
+  if (/anthropic\.com/.test(baseUrl)) headers["anthropic-dangerous-direct-browser-access"] = "true";
+
+  let response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model, messages, temperature: 0.2, max_tokens: 1024, stream: true }),
+    });
+  } catch (error) {
+    throw new Error(`Could not reach ${baseUrl} (network or CORS error). ${error.message}`);
+  }
+
+  if (!response.ok || !response.body) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`API request failed (HTTP ${response.status}). ${shorten(detail, 300)}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let out = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const payload = trimmed.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      let json;
+      try {
+        json = JSON.parse(payload);
+      } catch {
+        continue; // keep-alive comment or split frame
+      }
+      const delta = json.choices?.[0]?.delta?.content || "";
+      if (delta) {
+        out += delta;
+        onDelta?.(out);
+      }
+    }
+  }
+  return out.trim();
 }
 
 function flattenMessages(messages) {
@@ -504,13 +590,70 @@ function flattenMessages(messages) {
 
 function selectedAnswerMode() {
   const raw = els.answerMode.value || "auto";
+  const base = { webllmModel: DEFAULT_WEBLLM_MODEL, transformersModel: DEFAULT_TRANSFORMERS_MODEL };
   if (raw.startsWith("webllm:")) {
-    return { engine: "webllm", webllmModel: raw.slice("webllm:".length), transformersModel: DEFAULT_TRANSFORMERS_MODEL };
+    return { ...base, engine: "webllm", webllmModel: raw.slice("webllm:".length) };
   }
   if (raw.startsWith("transformers:")) {
-    return { engine: "transformers", webllmModel: DEFAULT_WEBLLM_MODEL, transformersModel: raw.slice("transformers:".length) };
+    return { ...base, engine: "transformers", transformersModel: raw.slice("transformers:".length) };
   }
-  return { engine: raw, webllmModel: DEFAULT_WEBLLM_MODEL, transformersModel: DEFAULT_TRANSFORMERS_MODEL };
+  if (raw === "api") {
+    return { ...base, engine: "api", api: apiConfig() };
+  }
+  return { ...base, engine: raw };
+}
+
+function apiConfig() {
+  return {
+    baseUrl: (els.apiBaseUrl.value || "").trim().replace(/\/+$/, ""),
+    model: (els.apiModel.value || "").trim(),
+    apiKey: (els.apiKey.value || "").trim(),
+  };
+}
+
+function initSettings() {
+  const saved = loadSettings();
+  if (saved.mode && [...els.answerMode.options].some((option) => option.value === saved.mode)) {
+    els.answerMode.value = saved.mode;
+  }
+  if (saved.apiBaseUrl) els.apiBaseUrl.value = saved.apiBaseUrl;
+  if (saved.apiModel) els.apiModel.value = saved.apiModel;
+  if (saved.apiKey) els.apiKey.value = saved.apiKey;
+  syncApiSettingsVisibility();
+
+  els.answerMode.addEventListener("change", () => {
+    syncApiSettingsVisibility();
+    saveSettings();
+  });
+  for (const input of [els.apiBaseUrl, els.apiModel, els.apiKey]) {
+    input.addEventListener("change", saveSettings);
+  }
+}
+
+function syncApiSettingsVisibility() {
+  els.apiSettings.hidden = els.answerMode.value !== "api";
+}
+
+function loadSettings() {
+  try {
+    return JSON.parse(localStorage.getItem(STORE_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSettings() {
+  const settings = {
+    mode: els.answerMode.value,
+    apiBaseUrl: els.apiBaseUrl.value.trim(),
+    apiModel: els.apiModel.value.trim(),
+    apiKey: els.apiKey.value.trim(),
+  };
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(settings));
+  } catch {
+    /* localStorage may be unavailable (private mode); settings stay in-memory. */
+  }
 }
 
 async function createBuiltInModel() {

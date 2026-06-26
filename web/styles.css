@@ -57,7 +57,23 @@ h1 {
 .model-controls {
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(200px, 260px);
+  grid-template-columns: minmax(220px, 300px);
+}
+
+.api-settings {
+  display: grid;
+  gap: 6px;
+}
+
+.api-settings[hidden] {
+  display: none;
+}
+
+.api-note {
+  margin: 0;
+  color: #6b7280;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 input,

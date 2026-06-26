@@ -2,6 +2,12 @@
 
 `index.html` is a static chat page for the generated browser index in `data/index/browser`.
 
+> The most capable way to get AI help with this corpus is to clone the repo and
+> run an agent CLI — [Claude Code](https://claude.com/claude-code) or
+> [Codex](https://github.com/openai/codex) — inside the directory and ask your
+> questions directly. `AGENTS.md` teaches the agent to use the bundled search
+> CLI. This browser page is the no-install convenience option.
+
 Build the index first:
 
 ```bash
@@ -62,6 +68,13 @@ switches the panel to that turn's sources.
 
 The single answer-model selector can use:
 
+- `Hosted API (OpenAI-compatible)`, where you supply a base URL, model name, and
+  API key. This is the most reliable tool-caller in the browser. It works with
+  any OpenAI-compatible chat-completions endpoint — OpenAI, OpenRouter, Groq,
+  Together, Anthropic's compatibility endpoint (`https://api.anthropic.com/v1`),
+  and local servers such as Ollama or LM Studio. The base URL, model, and key
+  are stored only in this browser's `localStorage` and the request goes directly
+  from your browser to the endpoint, so the endpoint must allow CORS.
 - Chrome's built-in local LLM API when available.
 - Specific WebLLM models loaded from CDN with browser-cached WebGPU artifacts.
 - Specific Transformers.js models loaded from CDN with browser-cached ONNX artifacts.
