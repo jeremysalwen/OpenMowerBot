@@ -56,7 +56,7 @@ h1 {
 }
 
 .model-controls {
-  grid-template-columns: 150px;
+  grid-template-columns: minmax(220px, 280px);
 }
 
 input,

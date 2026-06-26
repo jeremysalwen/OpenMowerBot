@@ -22,11 +22,11 @@ Available browser tools:
 - `getConversationContext`: expands a promising message into same-channel surrounding conversation.
 - `getChannelRange`: reads a channel time range directly when the chat request identifies one.
 
-The answer engine can use:
+The single answer-model selector can use:
 
 - Chrome's built-in local LLM API when available.
-- WebLLM loaded from CDN with a browser-cached WebGPU model.
-- Transformers.js loaded from CDN with a browser-cached ONNX model.
+- Specific WebLLM models loaded from CDN with browser-cached WebGPU artifacts.
+- Specific Transformers.js models loaded from CDN with browser-cached ONNX artifacts.
 - Evidence-only mode when no local LLM is available.
 
 WebLLM does not require built-in browser LLM support, but it does require WebGPU. Firefox builds without WebGPU should use Auto LLM or Transformers.js mode, which runs through WASM/CPU by default. The first model load downloads model artifacts and can take several minutes.

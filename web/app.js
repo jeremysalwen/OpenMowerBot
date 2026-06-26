@@ -3,7 +3,7 @@ const WEBLLM_IMPORT_URL = "https://esm.run/@mlc-ai/web-llm";
 const TRANSFORMERS_IMPORT_URL = "https://esm.run/@huggingface/transformers";
 const DEFAULT_WEBLLM_MODEL = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
 const DEFAULT_TRANSFORMERS_MODEL = "onnx-community/SmolLM2-135M-Instruct-ONNX-MHA";
-const APP_VERSION = "2026-06-26.6";
+const APP_VERSION = "2026-06-26.7";
 const MAX_RESULTS = 48;
 const MAX_CANDIDATES = 900;
 const ANSWER_EVIDENCE_LIMIT = 24;
@@ -32,7 +32,7 @@ const state = {
 
 const els = {
   query: document.querySelector("#query"),
-  engine: document.querySelector("#engine"),
+  answerMode: document.querySelector("#answer-mode"),
   composer: document.querySelector("#composer"),
   send: document.querySelector("#send"),
   summary: document.querySelector("#summary"),
@@ -429,7 +429,8 @@ function matchesFilters(message, args) {
 }
 
 async function generateAnswer(question, evidence, assistantNode) {
-  const requested = els.engine.value;
+  const mode = selectedAnswerMode();
+  const requested = mode.engine;
 
   if (requested === "evidence") {
     return formatEvidenceAnswer(question, evidence);
@@ -454,7 +455,7 @@ async function generateAnswer(question, evidence, assistantNode) {
 
   if (requested === "webllm" || requested === "auto") {
     try {
-      const webllm = await createWebLLMEngine(assistantNode);
+      const webllm = await createWebLLMEngine(assistantNode, mode.webllmModel);
       if (webllm) {
         setSummary("Answering with WebLLM...");
         return await promptWebLLM(webllm, question, evidence, assistantNode);
@@ -466,7 +467,7 @@ async function generateAnswer(question, evidence, assistantNode) {
 
   if (requested === "transformers" || requested === "webllm" || requested === "auto") {
     try {
-      const generator = await createTransformersGenerator(assistantNode);
+      const generator = await createTransformersGenerator(assistantNode, mode.transformersModel);
       if (generator) {
         setSummary("Answering with Transformers.js...");
         return await promptTransformers(generator, question, evidence);
@@ -476,8 +477,38 @@ async function generateAnswer(question, evidence, assistantNode) {
     }
   }
 
-  return `No local browser LLM is available for engine "${requested}" with WebGPU ${hasWebGPU() ? "available" : "unavailable"}.\n\n`
+  return `No local browser LLM is available for "${mode.label}" with WebGPU ${hasWebGPU() ? "available" : "unavailable"}.\n\n`
     + formatEvidenceAnswer(question, evidence);
+}
+
+function selectedAnswerMode() {
+  const raw = els.answerMode.value || "auto";
+  if (raw.startsWith("webllm:")) {
+    const model = raw.slice("webllm:".length);
+    return {
+      engine: "webllm",
+      webllmModel: model,
+      transformersModel: DEFAULT_TRANSFORMERS_MODEL,
+      label: `WebLLM ${model}`,
+    };
+  }
+
+  if (raw.startsWith("transformers:")) {
+    const model = raw.slice("transformers:".length);
+    return {
+      engine: "transformers",
+      webllmModel: DEFAULT_WEBLLM_MODEL,
+      transformersModel: model,
+      label: `Transformers.js ${model}`,
+    };
+  }
+
+  return {
+    engine: raw,
+    webllmModel: DEFAULT_WEBLLM_MODEL,
+    transformersModel: DEFAULT_TRANSFORMERS_MODEL,
+    label: raw,
+  };
 }
 
 async function createBuiltInModel() {
@@ -494,13 +525,13 @@ async function promptBuiltInModel(model, prompt) {
   throw new Error("The available browser model does not expose a prompt method.");
 }
 
-async function createWebLLMEngine(assistantNode) {
+async function createWebLLMEngine(assistantNode, modelName = DEFAULT_WEBLLM_MODEL) {
   if (!hasWebGPU()) {
     updateAssistantMessage(assistantNode, "WebLLM requires WebGPU. Trying the Transformers.js WASM fallback instead.", []);
     return null;
   }
 
-  const selectedModel = DEFAULT_WEBLLM_MODEL;
+  const selectedModel = modelName || DEFAULT_WEBLLM_MODEL;
   if (state.webllmEngine && state.webllmModel === selectedModel) {
     return state.webllmEngine;
   }
@@ -528,8 +559,8 @@ function hasWebGPU() {
   return Boolean(globalThis.navigator?.gpu);
 }
 
-async function createTransformersGenerator(assistantNode) {
-  const selectedModel = DEFAULT_TRANSFORMERS_MODEL;
+async function createTransformersGenerator(assistantNode, modelName = DEFAULT_TRANSFORMERS_MODEL) {
+  const selectedModel = modelName || DEFAULT_TRANSFORMERS_MODEL;
   if (state.transformersGenerator && state.transformersModel === selectedModel) {
     return state.transformersGenerator;
   }
