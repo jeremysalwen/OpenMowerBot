@@ -3,6 +3,7 @@ const WEBLLM_IMPORT_URL = "https://esm.run/@mlc-ai/web-llm";
 const TRANSFORMERS_IMPORT_URL = "https://esm.run/@huggingface/transformers";
 const DEFAULT_WEBLLM_MODEL = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
 const DEFAULT_TRANSFORMERS_MODEL = "onnx-community/SmolLM2-135M-Instruct-ONNX-MHA";
+const APP_VERSION = "2026-06-26.3";
 const MAX_RESULTS = 40;
 const MAX_CANDIDATES = 600;
 const ANSWER_EVIDENCE_LIMIT = 12;
@@ -42,7 +43,7 @@ init().catch((error) => {
 
 async function init() {
   state.manifest = await fetchJson(`${INDEX_ROOT}manifest.json`);
-  setSummary(`Loaded ${state.manifest.messageCount.toLocaleString()} messages`);
+  setSummary(`Loaded ${state.manifest.messageCount.toLocaleString()} messages. App ${APP_VERSION}. WebGPU: ${hasWebGPU() ? "yes" : "no"}.`);
   els.search.addEventListener("click", () => runSearch().catch(showError));
   els.answer.addEventListener("click", () => runAnswer().catch(showError));
   els.query.addEventListener("keydown", (event) => {
@@ -219,11 +220,11 @@ async function generateAnswer(question, evidence) {
         return await promptWebLLM(webllm, question, evidence);
       }
     } catch (error) {
-      return `WebLLM failed: ${error.message}\n\n${formatEvidenceOnly(evidence)}`;
+      showAnswer(`WebLLM failed: ${error.message}\n\nTrying Transformers.js instead.`);
     }
   }
 
-  if (requested === "transformers" || requested === "auto") {
+  if (requested === "transformers" || requested === "webllm" || requested === "auto") {
     try {
       const generator = await createTransformersGenerator();
       if (generator) {
@@ -235,7 +236,7 @@ async function generateAnswer(question, evidence) {
     }
   }
 
-  return "No local browser LLM is available. Showing ranked evidence instead.\n\n"
+  return `No local browser LLM is available for engine "${requested}" with WebGPU ${hasWebGPU() ? "available" : "unavailable"}. Showing ranked evidence instead.\n\n`
     + formatEvidenceOnly(evidence);
 }
 
@@ -254,7 +255,7 @@ async function promptBuiltInModel(model, prompt) {
 }
 
 async function createWebLLMEngine() {
-  if (!("gpu" in navigator)) {
+  if (!hasWebGPU()) {
     showAnswer("WebLLM requires WebGPU. Trying the Transformers.js WASM fallback instead.");
     return null;
   }
@@ -281,6 +282,10 @@ async function createWebLLMEngine() {
   });
 
   return state.webllmEngine;
+}
+
+function hasWebGPU() {
+  return Boolean(globalThis.navigator?.gpu);
 }
 
 async function createTransformersGenerator() {
