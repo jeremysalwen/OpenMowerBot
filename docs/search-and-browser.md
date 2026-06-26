@@ -54,15 +54,17 @@ The static page should:
 
 1. Load `data/index/browser/manifest.json`.
 2. Let the user chat with the corpus without a separate search/filter form.
-3. Run a bounded agent loop that may call retrieval tools repeatedly before answering.
+3. Run a plain tool-calling loop where the selected LLM decides which retrieval tools to call, with a bounded number of steps. The loop must not hard-code a retrieval strategy.
 4. Use search tools to find likely messages from sharded lexical/vector indexes.
 5. Use context tools to retrieve same-channel surrounding conversation or explicit channel time ranges.
-6. Display cited evidence with channel, author, timestamp, and `messageUrl` links back to Discord.
+6. Display cited evidence in a side panel (channel, author, timestamp, and `messageUrl` links back to Discord), referenced from the answer by bracketed citation numbers rather than repeated inline or below the answer.
 7. Optionally synthesize an answer through the selected local LLM adapter.
 
-The current static page supports a chat interface, Chrome built-in LLM APIs, WebLLM loaded from CDN, Transformers.js loaded from CDN, and evidence-only mode. WebLLM and Transformers.js download model artifacts on first use and then use the browser cache.
+The current static page is a model-driven tool-calling agent: the LLM emits one JSON object per step (a tool call or a final answer) and the loop feeds tool observations back until it answers. Cited sources render in a right-hand Sources panel, with clickable `[n]` citations in the answer. It supports a chat interface, Chrome built-in LLM APIs, WebLLM loaded from CDN, Transformers.js loaded from CDN, and evidence-only mode. WebLLM and Transformers.js download model artifacts on first use and then use the browser cache.
 
 Do not require a server process. Any preprocessing must happen before publishing.
+
+`.github/workflows/deploy-pages.yml` publishes the app to GitHub Pages: it rebuilds `data/index/browser` from the committed corpus, assembles `web/` with the index as a sibling, and deploys. The browser index stays reproducible and uncommitted. Attachments are not published; the deploy sets `attachmentsLocal:false` in `web/config.js` so attachment links fall back to Discord CDN URLs.
 
 ## Local Agent Compatibility
 

@@ -14,19 +14,66 @@ Serve the repository root, then open `/web/`:
 python3 -m http.server 8080
 ```
 
-The page supports a chat interface, Discord source links, and selected local attachment links. Each question runs a bounded agent loop before answering. The loop can make multiple tool calls, inspect observations, and stop when it has enough cited context.
+## Hosting on GitHub Pages
 
-Available browser tools:
+The app is published automatically by `.github/workflows/deploy-pages.yml`. It
+rebuilds the browser index from the committed corpus and deploys `web/` plus the
+index to GitHub Pages, so nothing under `data/index/` needs to be committed. Set
+the repository's **Pages → Source** to **GitHub Actions** once; the live app is
+then at `https://jeremysalwen.github.io/OpenMowerBot/`.
 
-- `searchDiscord`: finds likely messages from the static lexical index.
-- `getConversationContext`: expands a promising message into same-channel surrounding conversation.
-- `getChannelRange`: reads a channel time range directly when the chat request identifies one.
+`config.js` holds build-time site config. The committed default
+(`attachmentsLocal: true`) is for serving the repository locally, where
+`data/attachments/` exists. The Pages deploy overwrites it with
+`attachmentsLocal: false`, because attachments are not published; attachment
+links then fall back to the original Discord CDN URLs.
+
+## How it works
+
+The page is a plain tool-calling agent. There is no hard-coded retrieval
+strategy: the selected local LLM drives the conversation and decides, step by
+step, which tool to call and with what arguments. Each step the model emits a
+single JSON object — either a tool call or a final answer — and the loop feeds
+the tool results back as observations until the model answers (or the tool-call
+budget is reached).
+
+Tools exposed to the model:
+
+- `search_messages(query, channel?, author?, after?, before?, has_attachment?, limit?)`:
+  full-text search over the static lexical index.
+- `get_context(message_id, minutes_before?, minutes_after?)`: same-channel
+  conversation surrounding a message id returned by a previous search.
+- `read_channel(channel, after?, before?, author?, limit?)`: messages from a
+  channel within a date range, in chronological order.
+
+Each tool call is shown in the transcript as a collapsible card so you can see
+what the agent did.
+
+## Citations
+
+Sources are not embedded in the answer text or repeated below it. The answer
+cites messages with bracketed numbers like `[1]`, and the matching source cards
+(timestamp, channel, author, snippet, Discord link, and any local attachments)
+are listed in the **Sources** panel on the right. Clicking a `[n]` citation
+scrolls to and highlights that source. Clicking an earlier assistant turn
+switches the panel to that turn's sources.
+
+## Answer models
 
 The single answer-model selector can use:
 
 - Chrome's built-in local LLM API when available.
 - Specific WebLLM models loaded from CDN with browser-cached WebGPU artifacts.
 - Specific Transformers.js models loaded from CDN with browser-cached ONNX artifacts.
-- Evidence-only mode when no local LLM is available.
+- `Evidence only`, which skips the LLM and just lists the top search matches in
+  the Sources panel (no tool-calling agent).
 
-WebLLM does not require built-in browser LLM support, but it does require WebGPU. Firefox builds without WebGPU should use Auto LLM or Transformers.js mode, which runs through WASM/CPU by default. The first model load downloads model artifacts and can take several minutes.
+In `Auto local model` mode the page tries the built-in model, then WebLLM
+(requires WebGPU), then Transformers.js (WASM/CPU). WebLLM does not require
+built-in browser LLM support, but it does require WebGPU. Firefox builds without
+WebGPU should use Auto or a Transformers.js model. The first model load
+downloads model artifacts and can take several minutes.
+
+Note that small local models are not always reliable at producing well-formed
+tool calls; the loop tolerates fenced JSON, minor formatting slips, and plain
+prose answers, but larger models follow the protocol more consistently.

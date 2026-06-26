@@ -96,11 +96,20 @@ Recommended repository policy:
 - Keep `.env` and Discord tokens out of git.
 - Do not commit the full raw export.
 - Use Git LFS or release assets if selected attachments are too large for normal git. `.gitattributes` marks selected attachments and binary index files for LFS.
-- For static hosting, publish `web/`, `data/corpus`, selected `data/attachments`, and generated browser index shards from `data/index/browser`.
+- For static hosting, publish `web/` and generated browser index shards from `data/index/browser`. The corpus is only needed to build the index; the browser app reads the index, not `data/corpus` directly.
+
+### GitHub Pages
+
+`.github/workflows/deploy-pages.yml` publishes the browser app to GitHub Pages. On each run it rebuilds `data/index/browser` from the committed corpus, assembles a static site under `web/` with the index as a sibling `data/index/browser`, and deploys it. The browser index is reproducible and is never committed.
+
+- One-time setup: in the repository settings, set **Pages → Build and deployment → Source** to **GitHub Actions**.
+- Live URL: `https://jeremysalwen.github.io/OpenMowerBot/` (the bare URL redirects into the app under `/web/`).
+- Triggers: pushes that touch `web/`, `data/corpus`, `src/`, or `bin/`; completion of the scheduled **Update Discord corpus** run; and manual `workflow_dispatch`.
+- Attachments are not published to Pages. The deploy sets `attachmentsLocal:false` in `web/config.js`, so attachment links fall back to the original Discord CDN URLs. When serving the repository locally, the committed `web/config.js` keeps attachment links pointed at local `data/attachments` files.
 
 ## Browser Direction
 
-The browser app loads `data/index/browser/manifest.json`, fetches only the needed message/index shards, and presents a chat interface. Internally it runs a bounded agent loop over browser tools such as `searchDiscord`, `getConversationContext`, and `getChannelRange` before passing cited evidence to a pluggable local answer engine.
+The browser app loads `data/index/browser/manifest.json`, fetches only the needed message/index shards, and presents a chat interface. It is a plain tool-calling agent: the selected local LLM decides, step by step, which browser tool to call (`search_messages`, `get_context`, `read_channel`) and answers once it has enough evidence. Cited sources are shown in a side panel, not baked into the answer text.
 
 Answer engine adapters should be isolated behind one interface:
 
@@ -111,7 +120,7 @@ Answer engine adapters should be isolated behind one interface:
 
 The WebLLM and Transformers.js paths import libraries from CDN and download selected model artifacts into the browser cache on first use. They do not require a server-side model endpoint.
 
-Retrieval must not depend on the LLM adapter. Search should be used to find likely threads; answer generation should use expanded conversation context and channel ranges, not isolated matching messages. The browser agent should be free to make multiple tool calls before answering. That keeps local agents, static hosting, and future Chrome APIs compatible with the same corpus.
+The tool *implementations* must not depend on the LLM adapter: the same `search_messages`, `get_context`, and `read_channel` tools back every engine, so swapping the answer model never changes how the corpus is queried. The LLM is responsible only for choosing which tools to call and when to stop. Search finds likely threads; the agent should expand promising hits into surrounding conversation and channel ranges rather than trusting isolated matches, and is free to make multiple tool calls before answering. That keeps local agents, static hosting, and future Chrome APIs compatible with the same corpus.
 
 ## Sources Checked
 

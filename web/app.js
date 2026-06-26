@@ -3,23 +3,20 @@ const WEBLLM_IMPORT_URL = "https://esm.run/@mlc-ai/web-llm";
 const TRANSFORMERS_IMPORT_URL = "https://esm.run/@huggingface/transformers";
 const DEFAULT_WEBLLM_MODEL = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
 const DEFAULT_TRANSFORMERS_MODEL = "onnx-community/SmolLM2-135M-Instruct-ONNX-MHA";
-const APP_VERSION = "2026-06-26.7";
+const APP_VERSION = "2026-06-26.9";
+// Optional build-time site config. The GitHub Pages deploy sets
+// attachmentsLocal:false because attachments are not published to Pages.
+const SITE_CONFIG = (typeof window !== "undefined" && window.DISCORD_HISTORY_CONFIG) || {};
 const MAX_RESULTS = 48;
 const MAX_CANDIDATES = 900;
-const ANSWER_EVIDENCE_LIMIT = 24;
-const CONTEXT_QUERY_LIMIT = 240;
-const CONTEXT_HIT_LIMIT = 4;
-const CONTEXT_MESSAGES_PER_HIT = 12;
-const CONTEXT_MINUTES_BEFORE = 45;
-const CONTEXT_MINUTES_AFTER = 45;
 const CONTEXT_ORDINAL_SCAN = 2500;
 const AGENT_MAX_STEPS = 8;
-const CHANNEL_RANGE_LIMIT = 80;
 
 const state = {
   manifest: null,
   termBuckets: new Map(),
   messageShards: new Map(),
+  seenById: new Map(),
   webllm: null,
   webllmEngine: null,
   webllmModel: null,
@@ -28,6 +25,7 @@ const state = {
   transformersModel: null,
   busy: false,
   turns: [],
+  activeTurn: null,
 };
 
 const els = {
@@ -37,21 +35,80 @@ const els = {
   send: document.querySelector("#send"),
   summary: document.querySelector("#summary"),
   transcript: document.querySelector("#transcript"),
+  sourcesList: document.querySelector("#sources-list"),
+  sourcesEmpty: document.querySelector("#sources-empty"),
+};
+
+// Tool registry. Each tool is callable by the model. `usage`/`summary` are
+// rendered into the system prompt so the model knows what is available, and
+// `run` is the browser-side implementation backed by the static index.
+const TOOLS = {
+  search_messages: {
+    usage: "search_messages(query, channel?, author?, after?, before?, has_attachment?, limit?)",
+    summary: "Full-text search of Discord messages. Returns matching messages with id, timestamp, channel, author, and a snippet.",
+    async run(args) {
+      const results = await searchMessages({
+        query: String(args.query || ""),
+        channel: args.channel,
+        author: args.author,
+        after: args.after,
+        before: args.before,
+        attachments: args.has_attachment ?? args.attachments,
+        limit: clampNumber(args.limit, 12, 1, MAX_RESULTS),
+      });
+      return { messages: results.map((result) => result.message) };
+    },
+  },
+  get_context: {
+    usage: "get_context(message_id, minutes_before?, minutes_after?)",
+    summary: "Read the same-channel conversation surrounding a message id from a previous search hit, to understand it before trusting it.",
+    async run(args) {
+      const id = String(args.message_id ?? args.messageId ?? args.id ?? "");
+      const center = state.seenById.get(id);
+      if (!center) {
+        return { messages: [], error: `unknown message_id "${id}". Call search_messages first and use an id from the results.` };
+      }
+      const messages = await getConversationContext({
+        centerOrdinal: center.o,
+        centerTimestamp: center.t,
+        channelId: center.chId,
+        channelName: center.ch,
+        minutesBefore: clampNumber(args.minutes_before, 45, 1, 360),
+        minutesAfter: clampNumber(args.minutes_after, 45, 1, 360),
+        maxMessages: 16,
+      });
+      return { messages };
+    },
+  },
+  read_channel: {
+    usage: "read_channel(channel, after?, before?, author?, limit?)",
+    summary: "Read messages from a channel within a date range, in chronological order. Use when the question names a channel and time window.",
+    async run(args) {
+      const messages = await getChannelRange({
+        channel: args.channel,
+        after: args.after,
+        before: args.before,
+        author: args.author,
+        attachments: args.has_attachment ?? args.attachments,
+        limit: clampNumber(args.limit, 40, 1, 80),
+      });
+      return { messages };
+    },
+  },
 };
 
 init().catch((error) => {
   setSummary(error.message);
-  appendAssistantMessage("The browser index could not be loaded.", [], error.message);
+  appendNoticeMessage("The browser index could not be loaded.", error.message);
 });
 
 async function init() {
   state.manifest = await fetchJson(`${INDEX_ROOT}manifest.json`);
   setSummary(statusText("Ready"));
-  appendAssistantMessage(
-    "Ask a question and I will use the Discord history tools iteratively before answering with cited sources.",
-    [],
-    "",
+  appendNoticeMessage(
+    "Ask a question about the OpenMower Discord history. I'll call search tools as needed and answer with cited sources shown in the Sources panel.",
   );
+  renderActiveSources();
 
   els.composer.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -80,230 +137,468 @@ async function submitQuestion() {
   appendUserMessage(question);
   setBusy(true);
 
-  const assistantNode = appendAssistantMessage("Thinking about which Discord history tools to use...", [], "");
+  const turn = createTurn();
+  setActiveTurn(turn);
 
   try {
-    const agentResult = await runAgentLoop(question, assistantNode);
-    if (agentResult.evidence.length === 0) {
-      updateAssistantMessage(assistantNode, agentResult.reason || "I could not find matching Discord messages for that question.", []);
-      setSummary(statusText("No evidence found"));
-      return;
-    }
-
-    setSummary(`Answering from ${agentResult.evidence.length} cited messages...`);
-    const answer = await generateAnswer(question, agentResult.evidence, assistantNode);
-    updateAssistantMessage(assistantNode, answer, agentResult.evidence);
-    state.turns.push({ question, evidence: agentResult.evidence, observations: agentResult.observations });
-    setSummary(statusText(`${agentResult.observations.length} tool steps, ${agentResult.evidence.length} cited`));
+    await runAgentTurn(question, turn);
+  } catch (error) {
+    setTurnStatus(turn, `Error: ${error.message}`);
+    setAnswer(turn, `Something went wrong while answering: ${error.message}`);
   } finally {
+    clearTurnStatus(turn);
     setBusy(false);
   }
 }
 
-function normalizeQuestionForSearch(question) {
-  const trimmed = question.trim();
-  const withoutQuestionWords = trimmed
-    .replace(/\b(what|when|where|who|why|how|does|did|is|are|was|were|can|could|would|should|please|tell|show|find|search|about|discord|history)\b/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+// --- Model-driven tool-calling agent ----------------------------------------
 
-  return (withoutQuestionWords || trimmed).slice(0, CONTEXT_QUERY_LIMIT);
-}
+async function runAgentTurn(question, turn) {
+  setTurnStatus(turn, "Loading the answer model...");
+  const engine = await resolveEngine((text) => setTurnStatus(turn, text));
 
-async function runAgentLoop(question, assistantNode) {
-  const memory = createAgentMemory(question);
+  if (!engine) {
+    await runEvidenceOnlyTurn(question, turn);
+    return;
+  }
+
+  const conversation = [
+    { role: "system", content: systemPrompt() },
+    { role: "user", content: question },
+  ];
+  const calledSignatures = new Set();
 
   for (let step = 1; step <= AGENT_MAX_STEPS; step += 1) {
-    const action = planNextAgentAction(memory);
-    if (action.name === "final") {
+    setSummary(`${engine.label}: step ${step}/${AGENT_MAX_STEPS}...`);
+    setTurnStatus(turn, "Thinking...");
+
+    const raw = await engine.chat(conversation, {
+      onDelta: (text) => setTurnStatus(turn, `Thinking: ${tail(text)}`),
+    });
+    conversation.push({ role: "assistant", content: raw });
+
+    const parsed = parseAgentOutput(raw);
+    if (parsed.kind === "answer") {
+      setAnswer(turn, parsed.answer);
+      setSummary(statusText(`Answered in ${step} step${step === 1 ? "" : "s"}, ${turn.list.length} sources`));
+      return;
+    }
+
+    const tool = TOOLS[parsed.tool];
+    if (!tool) {
+      renderToolCall(turn, parsed.tool, parsed.arguments, "error", 0);
+      conversation.push({
+        role: "user",
+        content: `Observation: unknown tool "${parsed.tool}". Available tools: ${Object.keys(TOOLS).join(", ")}. Reply with one JSON object.`,
+      });
+      continue;
+    }
+
+    const signature = `${parsed.tool}:${stableStringify(parsed.arguments)}`;
+    if (calledSignatures.has(signature)) {
+      conversation.push({
+        role: "user",
+        content: "Observation: you already ran that exact call. Try different arguments or give your final answer.",
+      });
+      continue;
+    }
+    calledSignatures.add(signature);
+
+    const card = renderToolCall(turn, parsed.tool, parsed.arguments, "running", 0);
+    let result;
+    try {
+      result = await tool.run(parsed.arguments || {});
+    } catch (error) {
+      result = { messages: [], error: error.message };
+    }
+
+    const numbered = registerEvidence(turn, result.messages || []);
+    renderActiveSources();
+    renderToolCall(turn, parsed.tool, parsed.arguments, result.error ? "error" : "done", numbered.length, card);
+    conversation.push({ role: "user", content: formatObservation(parsed.tool, numbered, result) });
+  }
+
+  // Budget exhausted: force a final answer from whatever was gathered.
+  setTurnStatus(turn, "Composing final answer...");
+  conversation.push({
+    role: "user",
+    content: 'You have reached the tool-call limit. Give your final answer now as {"answer": "..."} citing the source numbers you have.',
+  });
+  const raw = await engine.chat(conversation, {
+    onDelta: (text) => setTurnStatus(turn, `Thinking: ${tail(text)}`),
+  });
+  const parsed = parseAgentOutput(raw);
+  setAnswer(turn, parsed.kind === "answer" ? parsed.answer : stripJsonWrapper(raw));
+  setSummary(statusText(`Answered (tool budget reached), ${turn.list.length} sources`));
+}
+
+async function runEvidenceOnlyTurn(question, turn) {
+  setTurnStatus(turn, "No browser LLM available; searching the index...");
+  const card = renderToolCall(turn, "search_messages", { query: question }, "running", 0);
+  const result = await TOOLS.search_messages.run({ query: question, limit: 16 });
+  const numbered = registerEvidence(turn, result.messages || []);
+  renderActiveSources();
+  renderToolCall(turn, "search_messages", { query: question }, "done", numbered.length, card);
+
+  const answer = numbered.length > 0
+    ? "No browser LLM is selected or available, so I can't compose a written answer. The top matching messages are listed in the Sources panel "
+      + numbered.map((entry) => `[${entry.n}]`).join("")
+      + "."
+    : "No browser LLM is available and the search found no matching messages. Try different terms.";
+  setAnswer(turn, answer);
+  setSummary(statusText(`Evidence only, ${turn.list.length} sources`));
+}
+
+function systemPrompt() {
+  const tools = Object.values(TOOLS)
+    .map((tool) => `- ${tool.usage}\n  ${tool.summary}`)
+    .join("\n");
+
+  return [
+    "You are an assistant for the OpenMower Discord history archive.",
+    "Answer the user's question using only evidence you retrieve with the tools below. Do not rely on outside knowledge for specifics.",
+    "",
+    "Work one step at a time. On every step output a SINGLE JSON object and nothing else.",
+    "To call a tool:",
+    '  {"tool": "<name>", "arguments": { ... }}',
+    'You then receive an "Observation" listing numbered messages such as [1], [2].',
+    "When you have enough evidence, output your final answer:",
+    '  {"answer": "<answer text that cites sources like [1][2]>"}',
+    "",
+    "Guidance:",
+    "- Search before answering specific questions; refine terms if the first search is weak.",
+    "- Use get_context on a promising search hit to read the surrounding conversation before trusting it.",
+    "- Cite every factual claim with the bracketed source numbers from the observations.",
+    "- Source numbers are stable for the whole conversation; reuse the same number for the same message.",
+    "- If the evidence does not answer the question, say so plainly in the answer.",
+    "",
+    "Tools:",
+    tools,
+  ].join("\n");
+}
+
+function parseAgentOutput(raw) {
+  const obj = extractJsonObject(raw);
+  if (obj && typeof obj === "object") {
+    const toolName = normalizeToolName(obj.tool ?? obj.action ?? obj.name ?? obj.tool_name);
+    const answer = firstDefined(obj.answer, obj.final, obj.final_answer, obj.response, obj.reply);
+
+    if (toolName && TOOLS[toolName]) {
       return {
-        evidence: selectAgentEvidence(memory),
-        observations: memory.observations,
-        reason: action.reason,
+        kind: "tool",
+        tool: toolName,
+        arguments: obj.arguments ?? obj.args ?? obj.input ?? obj.parameters ?? {},
       };
     }
-
-    action.id = `${step}-${action.name}`;
-    renderAgentThought(assistantNode, step, action.reason);
-    renderToolProgress(assistantNode, action, "running", []);
-    const observation = await executeAgentTool(action, memory);
-    memory.observations.push(observation);
-    renderToolProgress(assistantNode, action, "complete", observation.messages);
-
-    if (observation.messages.length > 0) {
-      addEvidence(memory, observation.messages, observation.type);
+    if (answer != null) {
+      return { kind: "answer", answer: String(answer).trim() };
+    }
+    if (toolName) {
+      // Looks like a tool call for an unknown tool; surface the name.
+      return { kind: "tool", tool: toolName, arguments: obj.arguments ?? obj.args ?? {} };
     }
   }
 
-  return {
-    evidence: selectAgentEvidence(memory),
-    observations: memory.observations,
-    reason: "The tool step budget was reached before enough evidence was found.",
-  };
+  // No usable JSON: treat the whole output as a direct prose answer.
+  return { kind: "answer", answer: stripJsonWrapper(raw) };
 }
 
-function createAgentMemory(question) {
-  return {
-    question,
-    filters: {},
-    observations: [],
-    searchResults: [],
-    evidence: new Map(),
-    contextedMessageIds: new Set(),
-    searchedQueries: new Set(),
-    channelRanges: new Set(),
+function normalizeToolName(name) {
+  if (!name) return null;
+  const key = String(name).trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const aliases = {
+    search: "search_messages",
+    search_discord: "search_messages",
+    searchmessages: "search_messages",
+    messages: "search_messages",
+    context: "get_context",
+    getcontext: "get_context",
+    conversation: "get_context",
+    channel: "read_channel",
+    readchannel: "read_channel",
+    channel_range: "read_channel",
   };
+  if (TOOLS[key]) return key;
+  return aliases[key] || key;
 }
 
-function planNextAgentAction(memory) {
-  const filters = memory.filters;
+function extractJsonObject(raw) {
+  const text = String(raw || "");
 
-  if (memory.observations.length === 0 && filters.channel && (filters.after || filters.before) && !normalizeQuestionForSearch(memory.question)) {
-    return {
-      name: "getChannelRange",
-      reason: "The user supplied a channel/time range, so inspect that conversation directly before doing lexical search.",
-      arguments: {
-        channel: filters.channel,
-        after: filters.after,
-        before: filters.before,
-        limit: CHANNEL_RANGE_LIMIT,
-      },
-    };
+  // Prefer fenced ```json blocks.
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidates = [];
+  if (fenced) candidates.push(fenced[1]);
+
+  // Then scan for balanced top-level brace groups.
+  for (const group of scanBraceGroups(text)) candidates.push(group);
+
+  for (const candidate of candidates) {
+    const parsed = tryParseJson(candidate);
+    if (parsed && typeof parsed === "object") return parsed;
   }
-
-  const primaryQuery = normalizeQuestionForSearch(memory.question);
-  if (!memory.searchedQueries.has(primaryQuery)) {
-    return {
-      name: "searchDiscord",
-      reason: "Find likely entry points in the Discord corpus.",
-      arguments: {
-        query: primaryQuery,
-        ...filters,
-        limit: MAX_RESULTS,
-      },
-    };
-  }
-
-  const uncontexted = memory.searchResults
-    .map((result) => result.message)
-    .filter((message) => !memory.contextedMessageIds.has(message.id))
-    .slice(0, CONTEXT_HIT_LIMIT);
-
-  if (uncontexted.length > 0) {
-    const message = uncontexted[0];
-    return {
-      name: "getConversationContext",
-      reason: "Open the same-channel conversation around a promising search hit before treating it as evidence.",
-      arguments: {
-        messageId: message.id,
-        centerOrdinal: message.o,
-        centerTimestamp: message.t,
-        channelId: message.chId,
-        channelName: message.ch,
-        minutesBefore: CONTEXT_MINUTES_BEFORE,
-        minutesAfter: CONTEXT_MINUTES_AFTER,
-        maxMessages: CONTEXT_MESSAGES_PER_HIT,
-      },
-    };
-  }
-
-  if (memory.searchResults.length === 0 && !memory.searchedQueries.has(memory.question)) {
-    return {
-      name: "searchDiscord",
-      reason: "The cleaned query had no hits, so try the original user wording.",
-      arguments: {
-        query: memory.question.slice(0, CONTEXT_QUERY_LIMIT),
-        ...filters,
-        limit: MAX_RESULTS,
-      },
-    };
-  }
-
-  const rangeKey = `${filters.channel}|${filters.after}|${filters.before}`;
-  if (filters.channel && (filters.after || filters.before) && !memory.channelRanges.has(rangeKey)) {
-    return {
-      name: "getChannelRange",
-      reason: "The filters define a channel/time range; inspect it as additional conversation context.",
-      arguments: {
-        channel: filters.channel,
-        after: filters.after,
-        before: filters.before,
-        limit: CHANNEL_RANGE_LIMIT,
-      },
-    };
-  }
-
-  return {
-    name: "final",
-    reason: memory.evidence.size > 0
-      ? "Enough retrieved conversation context is available to answer."
-      : "No matching evidence was found after the available tool calls.",
-    arguments: {},
-  };
+  return null;
 }
 
-async function executeAgentTool(action, memory) {
-  if (action.name === "searchDiscord") {
-    const results = await searchMessages(action.arguments);
-    memory.searchedQueries.add(action.arguments.query || "");
-    memory.searchResults.push(...results);
-    return {
-      type: "search",
-      name: action.name,
-      messages: results.map((result) => result.message),
-      resultCount: results.length,
-    };
-  }
+function scanBraceGroups(text) {
+  const groups = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escape = false;
 
-  if (action.name === "getConversationContext") {
-    const messages = await getConversationContext(action.arguments);
-    if (action.arguments.messageId) {
-      memory.contextedMessageIds.add(action.arguments.messageId);
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (char === "\\") escape = true;
+      else if (char === '"') inString = false;
+      continue;
     }
-    return {
-      type: "context",
-      name: action.name,
-      messages,
-      resultCount: messages.length,
-    };
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        groups.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
   }
-
-  if (action.name === "getChannelRange") {
-    const messages = await getChannelRange(action.arguments);
-    memory.channelRanges.add(`${action.arguments.channel}|${action.arguments.after}|${action.arguments.before}`);
-    return {
-      type: "range",
-      name: action.name,
-      messages,
-      resultCount: messages.length,
-    };
-  }
-
-  throw new Error(`Unknown agent tool: ${action.name}`);
+  return groups;
 }
 
-function addEvidence(memory, messages, sourceType) {
-  for (const message of messages) {
-    const existing = memory.evidence.get(message.id);
-    if (!existing) {
-      memory.evidence.set(message.id, { message, sourceTypes: new Set([sourceType]) });
-    } else {
-      existing.sourceTypes.add(sourceType);
+function tryParseJson(text) {
+  const trimmed = String(text).trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // Tolerate trailing commas and single quotes from small models.
+    try {
+      const relaxed = trimmed
+        .replace(/,\s*([}\]])/g, "$1")
+        .replace(/'/g, '"');
+      return JSON.parse(relaxed);
+    } catch {
+      return null;
     }
   }
 }
 
-function selectAgentEvidence(memory) {
-  return [...memory.evidence.values()]
-    .sort((left, right) => {
-      const leftContext = left.sourceTypes.has("context") || left.sourceTypes.has("range") ? 1 : 0;
-      const rightContext = right.sourceTypes.has("context") || right.sourceTypes.has("range") ? 1 : 0;
-      if (leftContext !== rightContext) return rightContext - leftContext;
-      return (Date.parse(left.message.t || 0) || 0) - (Date.parse(right.message.t || 0) || 0);
-    })
-    .slice(0, ANSWER_EVIDENCE_LIMIT)
-    .map((entry) => entry.message);
+function stripJsonWrapper(raw) {
+  const text = String(raw || "").trim();
+  const obj = extractJsonObject(text);
+  const answer = obj && firstDefined(obj.answer, obj.final, obj.final_answer, obj.response, obj.reply);
+  if (answer != null) return String(answer).trim();
+  return text
+    .replace(/```(?:json)?/gi, "")
+    .replace(/```/g, "")
+    .trim() || "The model returned an empty answer.";
 }
+
+function formatObservation(toolName, numbered, result) {
+  if (result.error) {
+    return `Observation (${toolName}): ${result.error}`;
+  }
+  if (numbered.length === 0) {
+    return `Observation (${toolName}): no messages found. Try different search terms or filters.`;
+  }
+
+  const lines = [`Observation (${toolName}): ${numbered.length} message(s)`];
+  for (const { n, message } of numbered) {
+    lines.push(
+      `[${n}] id=${message.id} | ${formatDate(message.t)} | #${message.ch || "unknown"} | ${message.a || "unknown"}`,
+    );
+    lines.push(shorten(message.text || "(no text)", 260));
+  }
+  return lines.join("\n");
+}
+
+// --- Engine abstraction -----------------------------------------------------
+
+async function resolveEngine(note) {
+  const mode = selectedAnswerMode();
+  if (mode.engine === "evidence") return null;
+
+  const order = mode.engine === "auto"
+    ? ["built-in", "webllm", "transformers"]
+    : [mode.engine];
+
+  let lastError = null;
+  for (const kind of order) {
+    try {
+      const engine = await loadEngine(kind, mode, note);
+      if (engine) return engine;
+    } catch (error) {
+      lastError = error;
+      note?.(`${kind} unavailable: ${error.message}`);
+    }
+  }
+  if (lastError && order.length === 1) throw lastError;
+  return null;
+}
+
+async function loadEngine(kind, mode, note) {
+  if (kind === "built-in") {
+    const model = await createBuiltInModel();
+    if (!model) return null;
+    return {
+      label: "Built-in browser model",
+      async chat(messages) {
+        return promptBuiltInModel(model, flattenMessages(messages));
+      },
+    };
+  }
+
+  if (kind === "webllm") {
+    const engine = await createWebLLMEngine(mode.webllmModel, note);
+    if (!engine) return null;
+    return {
+      label: `WebLLM ${state.webllmModel}`,
+      async chat(messages, { onDelta } = {}) {
+        const chunks = await engine.chat.completions.create({
+          messages,
+          temperature: 0.2,
+          max_tokens: 800,
+          stream: true,
+        });
+        let out = "";
+        for await (const chunk of chunks) {
+          out += chunk.choices[0]?.delta?.content || "";
+          onDelta?.(out);
+        }
+        return out.trim();
+      },
+    };
+  }
+
+  if (kind === "transformers") {
+    const generator = await createTransformersGenerator(mode.transformersModel, note);
+    if (!generator) return null;
+    return {
+      label: `Transformers.js ${state.transformersModel}`,
+      async chat(messages) {
+        const result = await generator(messages, {
+          max_new_tokens: 512,
+          temperature: 0.2,
+          do_sample: false,
+          return_full_text: false,
+        });
+        return extractGeneratedText(result).trim();
+      },
+    };
+  }
+
+  return null;
+}
+
+function flattenMessages(messages) {
+  const body = messages
+    .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
+    .join("\n\n");
+  return `${body}\n\nASSISTANT:`;
+}
+
+function selectedAnswerMode() {
+  const raw = els.answerMode.value || "auto";
+  if (raw.startsWith("webllm:")) {
+    return { engine: "webllm", webllmModel: raw.slice("webllm:".length), transformersModel: DEFAULT_TRANSFORMERS_MODEL };
+  }
+  if (raw.startsWith("transformers:")) {
+    return { engine: "transformers", webllmModel: DEFAULT_WEBLLM_MODEL, transformersModel: raw.slice("transformers:".length) };
+  }
+  return { engine: raw, webllmModel: DEFAULT_WEBLLM_MODEL, transformersModel: DEFAULT_TRANSFORMERS_MODEL };
+}
+
+async function createBuiltInModel() {
+  const api = globalThis.LanguageModel || globalThis.ai?.languageModel;
+  if (!api) return null;
+  if (typeof api.create === "function") return api.create();
+  if (typeof api.createSession === "function") return api.createSession();
+  return null;
+}
+
+async function promptBuiltInModel(model, prompt) {
+  if (typeof model.prompt === "function") return model.prompt(prompt);
+  if (typeof model.generate === "function") return model.generate(prompt);
+  throw new Error("The available browser model does not expose a prompt method.");
+}
+
+async function createWebLLMEngine(modelName, note) {
+  if (!hasWebGPU()) {
+    note?.("WebLLM requires WebGPU; falling back to the WASM model.");
+    return null;
+  }
+
+  const selectedModel = modelName || DEFAULT_WEBLLM_MODEL;
+  if (state.webllmEngine && state.webllmModel === selectedModel) {
+    return state.webllmEngine;
+  }
+
+  note?.("Loading WebLLM. The first model download can take several minutes and is cached by the browser.");
+  state.webllm = state.webllm || await import(WEBLLM_IMPORT_URL);
+  state.webllmModel = selectedModel;
+  state.webllmEngine = await state.webllm.CreateMLCEngine(selectedModel, {
+    initProgressCallback: (progress) => {
+      const percent = Number.isFinite(progress?.progress) ? ` ${Math.round(progress.progress * 100)}%` : "";
+      const text = `${progress?.text || "Loading WebLLM model..."}${percent}`;
+      setSummary(text);
+      note?.(text);
+    },
+  });
+
+  return state.webllmEngine;
+}
+
+function hasWebGPU() {
+  return Boolean(globalThis.navigator?.gpu);
+}
+
+async function createTransformersGenerator(modelName, note) {
+  const selectedModel = modelName || DEFAULT_TRANSFORMERS_MODEL;
+  if (state.transformersGenerator && state.transformersModel === selectedModel) {
+    return state.transformersGenerator;
+  }
+
+  note?.("Loading Transformers.js. The first model download can take several minutes and is cached by the browser. Firefox uses the WASM/CPU backend unless WebGPU is enabled.");
+  state.transformers = state.transformers || await import(TRANSFORMERS_IMPORT_URL);
+  state.transformersModel = selectedModel;
+  state.transformersGenerator = await state.transformers.pipeline("text-generation", selectedModel, {
+    dtype: "q4",
+    progress_callback: (progress) => {
+      const file = progress?.file ? ` ${progress.file}` : "";
+      const percent = Number.isFinite(progress?.progress) ? ` ${Math.round(progress.progress)}%` : "";
+      const status = progress?.status || "loading";
+      const text = `Transformers.js ${status}${file}${percent}`;
+      setSummary(text);
+      note?.(text);
+    },
+  });
+
+  return state.transformersGenerator;
+}
+
+function extractGeneratedText(result) {
+  if (typeof result === "string") return result;
+  if (Array.isArray(result)) {
+    return result.map(extractGeneratedText).filter(Boolean).join("\n");
+  }
+  if (result && typeof result.generated_text === "string") {
+    return result.generated_text;
+  }
+  if (result && Array.isArray(result.generated_text)) {
+    return result.generated_text
+      .map((message) => message?.content || "")
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+// --- Tool implementations (static index access) -----------------------------
 
 async function searchMessages(args) {
   const terms = tokenize(args.query);
@@ -383,7 +678,7 @@ async function getChannelRange(args) {
     const messageTime = Date.parse(message.t || 0);
     if (!Number.isFinite(messageTime) || messageTime < after || messageTime > before) continue;
     messages.push(message);
-    if (messages.length >= (args.limit || CHANNEL_RANGE_LIMIT)) break;
+    if (messages.length >= (args.limit || 80)) break;
   }
 
   return messages;
@@ -413,7 +708,11 @@ async function messageForOrdinal(ordinal) {
   if (!state.messageShards.has(shardIndex)) {
     const shard = state.manifest.messageShards.find((entry) => entry.index === shardIndex);
     if (!shard) return null;
-    state.messageShards.set(shardIndex, await fetchJson(`${INDEX_ROOT}${shard.file}`));
+    const records = await fetchJson(`${INDEX_ROOT}${shard.file}`);
+    state.messageShards.set(shardIndex, records);
+    for (const record of records) {
+      if (record && record.id != null) state.seenById.set(String(record.id), record);
+    }
   }
 
   return state.messageShards.get(shardIndex).find((message) => message.o === ordinal) || null;
@@ -428,287 +727,55 @@ function matchesFilters(message, args) {
   return true;
 }
 
-async function generateAnswer(question, evidence, assistantNode) {
-  const mode = selectedAnswerMode();
-  const requested = mode.engine;
+// --- Per-turn evidence ------------------------------------------------------
 
-  if (requested === "evidence") {
-    return formatEvidenceAnswer(question, evidence);
-  }
+function createTurn() {
+  const node = messageShell("assistant");
+  node.dataset.turn = String(state.turns.length);
 
-  if (requested === "built-in" || requested === "auto") {
-    try {
-      const builtIn = await createBuiltInModel();
-      if (builtIn) {
-        setSummary("Answering with built-in browser LLM...");
-        return await promptBuiltInModel(builtIn, buildAnswerPrompt(question, evidence));
-      }
-    } catch (error) {
-      if (requested === "built-in") {
-        return `Built-in browser LLM failed: ${error.message}\n\n${formatEvidenceAnswer(question, evidence)}`;
-      }
+  const status = document.createElement("div");
+  status.className = "turn-status";
+  status.textContent = "Working...";
+
+  const trace = document.createElement("div");
+  trace.className = "tool-trace";
+
+  node.append(status, trace);
+  els.transcript.append(node);
+
+  const turn = { node, statusEl: status, traceEl: trace, bodyEl: null, list: [], byId: new Map() };
+  node.addEventListener("click", () => setActiveTurn(turn));
+  state.turns.push(turn);
+  scrollTranscript();
+  return turn;
+}
+
+function registerEvidence(turn, messages) {
+  const out = [];
+  for (const message of messages) {
+    if (!message || message.id == null) continue;
+    const id = String(message.id);
+    let n = turn.byId.get(id);
+    if (!n) {
+      turn.list.push(message);
+      n = turn.list.length;
+      turn.byId.set(id, n);
     }
-    if (requested === "built-in") {
-      return "The built-in browser LLM API is not available.\n\n" + formatEvidenceAnswer(question, evidence);
-    }
+    out.push({ n, message });
   }
+  return out;
+}
 
-  if (requested === "webllm" || requested === "auto") {
-    try {
-      const webllm = await createWebLLMEngine(assistantNode, mode.webllmModel);
-      if (webllm) {
-        setSummary("Answering with WebLLM...");
-        return await promptWebLLM(webllm, question, evidence, assistantNode);
-      }
-    } catch (error) {
-      updateAssistantMessage(assistantNode, `WebLLM failed: ${error.message}\n\nTrying Transformers.js instead.`, evidence);
-    }
+function setActiveTurn(turn) {
+  if (state.activeTurn === turn) return;
+  state.activeTurn = turn;
+  for (const node of els.transcript.querySelectorAll(".message.assistant")) {
+    node.classList.toggle("active-turn", node === turn?.node);
   }
-
-  if (requested === "transformers" || requested === "webllm" || requested === "auto") {
-    try {
-      const generator = await createTransformersGenerator(assistantNode, mode.transformersModel);
-      if (generator) {
-        setSummary("Answering with Transformers.js...");
-        return await promptTransformers(generator, question, evidence);
-      }
-    } catch (error) {
-      return `Transformers.js failed: ${error.message}\n\n${formatEvidenceAnswer(question, evidence)}`;
-    }
-  }
-
-  return `No local browser LLM is available for "${mode.label}" with WebGPU ${hasWebGPU() ? "available" : "unavailable"}.\n\n`
-    + formatEvidenceAnswer(question, evidence);
+  renderActiveSources();
 }
 
-function selectedAnswerMode() {
-  const raw = els.answerMode.value || "auto";
-  if (raw.startsWith("webllm:")) {
-    const model = raw.slice("webllm:".length);
-    return {
-      engine: "webllm",
-      webllmModel: model,
-      transformersModel: DEFAULT_TRANSFORMERS_MODEL,
-      label: `WebLLM ${model}`,
-    };
-  }
-
-  if (raw.startsWith("transformers:")) {
-    const model = raw.slice("transformers:".length);
-    return {
-      engine: "transformers",
-      webllmModel: DEFAULT_WEBLLM_MODEL,
-      transformersModel: model,
-      label: `Transformers.js ${model}`,
-    };
-  }
-
-  return {
-    engine: raw,
-    webllmModel: DEFAULT_WEBLLM_MODEL,
-    transformersModel: DEFAULT_TRANSFORMERS_MODEL,
-    label: raw,
-  };
-}
-
-async function createBuiltInModel() {
-  const api = globalThis.LanguageModel || globalThis.ai?.languageModel;
-  if (!api) return null;
-  if (typeof api.create === "function") return api.create();
-  if (typeof api.createSession === "function") return api.createSession();
-  return null;
-}
-
-async function promptBuiltInModel(model, prompt) {
-  if (typeof model.prompt === "function") return model.prompt(prompt);
-  if (typeof model.generate === "function") return model.generate(prompt);
-  throw new Error("The available browser model does not expose a prompt method.");
-}
-
-async function createWebLLMEngine(assistantNode, modelName = DEFAULT_WEBLLM_MODEL) {
-  if (!hasWebGPU()) {
-    updateAssistantMessage(assistantNode, "WebLLM requires WebGPU. Trying the Transformers.js WASM fallback instead.", []);
-    return null;
-  }
-
-  const selectedModel = modelName || DEFAULT_WEBLLM_MODEL;
-  if (state.webllmEngine && state.webllmModel === selectedModel) {
-    return state.webllmEngine;
-  }
-
-  setSummary("Loading WebLLM...");
-  updateAssistantMessage(assistantNode, "Loading WebLLM. The first model download can take several minutes and is cached by the browser.", []);
-
-  state.webllm = state.webllm || await import(WEBLLM_IMPORT_URL);
-  state.webllmModel = selectedModel;
-  state.webllmEngine = await state.webllm.CreateMLCEngine(selectedModel, {
-    initProgressCallback: (progress) => {
-      const text = progress?.text || "Loading WebLLM model...";
-      const percent = Number.isFinite(progress?.progress)
-        ? ` ${Math.round(progress.progress * 100)}%`
-        : "";
-      setSummary(`${text}${percent}`);
-      updateAssistantMessage(assistantNode, `${text}${percent}`, []);
-    },
-  });
-
-  return state.webllmEngine;
-}
-
-function hasWebGPU() {
-  return Boolean(globalThis.navigator?.gpu);
-}
-
-async function createTransformersGenerator(assistantNode, modelName = DEFAULT_TRANSFORMERS_MODEL) {
-  const selectedModel = modelName || DEFAULT_TRANSFORMERS_MODEL;
-  if (state.transformersGenerator && state.transformersModel === selectedModel) {
-    return state.transformersGenerator;
-  }
-
-  setSummary("Loading Transformers.js...");
-  updateAssistantMessage(assistantNode, "Loading Transformers.js. The first model download can take several minutes and is cached by the browser. Firefox uses the WASM/CPU backend unless WebGPU is enabled.", []);
-
-  state.transformers = state.transformers || await import(TRANSFORMERS_IMPORT_URL);
-  state.transformersModel = selectedModel;
-  state.transformersGenerator = await state.transformers.pipeline("text-generation", selectedModel, {
-    dtype: "q4",
-    progress_callback: (progress) => {
-      const file = progress?.file ? ` ${progress.file}` : "";
-      const percent = Number.isFinite(progress?.progress)
-        ? ` ${Math.round(progress.progress)}%`
-        : "";
-      const status = progress?.status || "loading";
-      setSummary(`Transformers.js ${status}${file}${percent}`);
-    },
-  });
-
-  return state.transformersGenerator;
-}
-
-async function promptWebLLM(engine, question, evidence, assistantNode) {
-  const chunks = await engine.chat.completions.create({
-    messages: buildChatMessages(question, evidence),
-    temperature: 0.2,
-    max_tokens: 700,
-    stream: true,
-  });
-
-  let answer = "";
-  for await (const chunk of chunks) {
-    answer += chunk.choices[0]?.delta?.content || "";
-    updateAssistantMessage(assistantNode, answer || "Generating answer...", evidence);
-  }
-
-  return answer.trim() || "The local model returned an empty answer.";
-}
-
-async function promptTransformers(generator, question, evidence) {
-  const prompt = buildPlainTextPrompt(question, evidence);
-  const result = await generator(prompt, {
-    max_new_tokens: 450,
-    temperature: 0.2,
-    do_sample: false,
-    return_full_text: false,
-  });
-
-  return extractGeneratedText(result).trim() || "The local model returned an empty answer.";
-}
-
-function buildAnswerPrompt(question, messages) {
-  const evidence = messages.map((message, index) => {
-    return `[${index + 1}] ${message.t} #${message.ch} ${message.a}: ${message.text}\n${message.url || ""}`;
-  }).join("\n\n");
-
-  return [
-    "Answer the user's question using only the Discord evidence below.",
-    "The evidence was gathered through Discord history tools and may include search hits, same-channel surrounding conversation, and channel time ranges; use the surrounding context to avoid over-interpreting isolated messages.",
-    "Cite claims with source numbers like [1] and include Discord links when useful.",
-    "If the evidence is insufficient, say so.",
-    "",
-    `Question: ${question}`,
-    "",
-    "Evidence:",
-    evidence,
-  ].join("\n");
-}
-
-function buildPlainTextPrompt(question, evidence) {
-  return [
-    "Answer using only the Discord evidence below.",
-    "The evidence was gathered through Discord history tools and may include search hits, same-channel surrounding conversation, and channel time ranges; read the surrounding messages before deciding what a hit means.",
-    "Cite claims with source numbers like [1].",
-    "If the evidence is insufficient, say so.",
-    "",
-    `Question: ${question || "(no question provided)"}`,
-    "",
-    "Evidence:",
-    formatEvidenceForPrompt(evidence),
-    "",
-    "Answer:",
-  ].join("\n");
-}
-
-function buildChatMessages(question, evidence) {
-  return [
-    {
-      role: "system",
-      content: "Answer using only the provided Discord evidence. The evidence was gathered through Discord history tools and may include search hits, same-channel surrounding conversation, and channel time ranges; read the surrounding messages before deciding what a hit means. Cite claims with source numbers like [1]. If the evidence is insufficient, say so.",
-    },
-    {
-      role: "user",
-      content: `Question: ${question || "(no question provided)"}\n\nEvidence:\n${formatEvidenceForPrompt(evidence)}`,
-    },
-  ];
-}
-
-function formatEvidenceForPrompt(messages) {
-  return messages.map((message, index) => {
-    return [
-      `[${index + 1}]`,
-      `Time: ${message.t || "unknown"}`,
-      `Channel: #${message.ch || "unknown"}`,
-      `Author: ${message.a || "unknown"}`,
-      `Discord URL: ${message.url || "none"}`,
-      `Reply URL: ${message.replyUrl || "none"}`,
-      `Attachments: ${formatAttachmentNames(message) || "none"}`,
-      `Text: ${message.text || ""}`,
-    ].join("\n");
-  }).join("\n\n");
-}
-
-function formatEvidenceAnswer(question, messages) {
-  const lines = [
-    `I found ${messages.length} Discord messages related to: ${question}`,
-    "",
-  ];
-
-  for (const [index, message] of messages.entries()) {
-    const text = (message.text || "").replace(/\s+/g, " ").trim();
-    lines.push(`[${index + 1}] ${message.t || "unknown"} #${message.ch || "unknown"} ${message.a || "unknown"}`);
-    lines.push(text || "(no message text)");
-    if (message.url) lines.push(message.url);
-    lines.push("");
-  }
-
-  return lines.join("\n").trim();
-}
-
-function extractGeneratedText(result) {
-  if (typeof result === "string") return result;
-  if (Array.isArray(result)) {
-    return result.map(extractGeneratedText).filter(Boolean).join("\n");
-  }
-  if (result && typeof result.generated_text === "string") {
-    return result.generated_text;
-  }
-  if (result && Array.isArray(result.generated_text)) {
-    return result.generated_text
-      .map((message) => message?.content || "")
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
-}
+// --- Rendering: transcript --------------------------------------------------
 
 function appendUserMessage(text) {
   const node = messageShell("user");
@@ -720,123 +787,156 @@ function appendUserMessage(text) {
   scrollTranscript();
 }
 
-function appendAssistantMessage(text, evidence, note) {
-  const node = messageShell("assistant");
+function appendNoticeMessage(text, note) {
+  const node = messageShell("assistant notice");
   const body = document.createElement("div");
   body.className = "message-body";
   body.textContent = text;
   node.append(body);
-  if (note) node.append(smallNote(note));
-  if (evidence.length > 0) node.append(renderSources(evidence));
+  if (note) {
+    const small = document.createElement("p");
+    small.className = "note";
+    small.textContent = note;
+    node.append(small);
+  }
   els.transcript.append(node);
   scrollTranscript();
-  return node;
 }
 
-function updateAssistantMessage(node, text, evidence) {
-  let body = node.querySelector(".message-body");
-  if (!body) {
-    body = document.createElement("div");
-    body.className = "message-body";
-    node.prepend(body);
-  }
-  body.textContent = text;
-
-  const oldSources = node.querySelector(".sources");
-  if (oldSources) oldSources.remove();
-  if (evidence.length > 0) node.append(renderSources(evidence));
+function setTurnStatus(turn, text) {
+  if (!turn.statusEl) return;
+  turn.statusEl.hidden = false;
+  turn.statusEl.textContent = text;
   scrollTranscript();
 }
 
-function renderAgentThought(node, step, text) {
-  let thought = node.querySelector(".agent-thought");
-  if (!thought) {
-    thought = document.createElement("div");
-    thought.className = "agent-thought";
-    node.append(thought);
-  }
+function clearTurnStatus(turn) {
+  if (turn.statusEl) turn.statusEl.hidden = true;
+}
 
-  const line = document.createElement("div");
-  line.textContent = `Step ${step}: ${text}`;
-  thought.append(line);
+function setAnswer(turn, text) {
+  clearTurnStatus(turn);
+  if (!turn.bodyEl) {
+    turn.bodyEl = document.createElement("div");
+    turn.bodyEl.className = "message-body";
+    turn.node.append(turn.bodyEl);
+  }
+  renderAnswerInto(turn.bodyEl, text, turn);
   scrollTranscript();
 }
 
-function renderToolProgress(node, toolCall, status, evidence) {
-  let tool = node.querySelector(`[data-tool-id="${toolCall.id}"]`);
-  if (!tool) {
-    tool = document.createElement("details");
-    tool.className = "tool-call";
-    tool.dataset.toolId = toolCall.id;
-    tool.open = true;
-    node.append(tool);
+function renderAnswerInto(target, text, turn) {
+  target.replaceChildren();
+  const parts = String(text).split(/(\[\d+\])/g);
+  for (const part of parts) {
+    const match = /^\[(\d+)\]$/.exec(part);
+    const n = match ? Number(match[1]) : null;
+    if (n && n >= 1 && n <= turn.list.length) {
+      const link = document.createElement("a");
+      link.className = "cite";
+      link.href = "#";
+      link.textContent = part;
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        setActiveTurn(turn);
+        focusSource(n);
+      });
+      target.append(link);
+    } else {
+      target.append(document.createTextNode(part));
+    }
   }
+}
 
-  const filters = [];
-  if (toolCall.arguments.query) filters.push(`query:${toolCall.arguments.query}`);
-  if (toolCall.arguments.channel) filters.push(`#${toolCall.arguments.channel}`);
-  if (toolCall.arguments.author) filters.push(`author:${toolCall.arguments.author}`);
-  if (toolCall.arguments.after) filters.push(`after:${toolCall.arguments.after}`);
-  if (toolCall.arguments.before) filters.push(`before:${toolCall.arguments.before}`);
-  if (toolCall.arguments.attachments) filters.push("has:attachment");
-  if (toolCall.arguments.hits) filters.push(`${toolCall.arguments.hits} seed hits`);
-  if (toolCall.arguments.channels?.length) filters.push(toolCall.arguments.channels.join(", "));
-  if (toolCall.arguments.messageId) filters.push(`message:${toolCall.arguments.messageId}`);
-  if (toolCall.arguments.channelName) filters.push(`#${toolCall.arguments.channelName}`);
-  if (toolCall.arguments.minutesBefore) filters.push(`${toolCall.arguments.minutesBefore}m before`);
-  if (toolCall.arguments.minutesAfter) filters.push(`${toolCall.arguments.minutesAfter}m after`);
-  if (toolCall.arguments.limit) filters.push(`limit:${toolCall.arguments.limit}`);
+function renderToolCall(turn, toolName, args, status, count, existing) {
+  const card = existing || document.createElement("details");
+  if (!existing) {
+    card.className = "tool-call";
+    card.open = false;
+    turn.traceEl.append(card);
+  }
+  card.classList.toggle("error", status === "error");
 
   const label = status === "running"
-    ? `Calling ${toolCall.name}...`
-    : `${toolCall.name} returned ${evidence.length} messages`;
+    ? `Calling ${toolName}...`
+    : status === "error"
+      ? `${toolName} failed`
+      : `${toolName} → ${count} message${count === 1 ? "" : "s"}`;
 
-  tool.replaceChildren(
-    summary(label),
-    codeLine(filters.join(" | ") || "no arguments"),
-  );
+  card.replaceChildren(summaryEl(label), codeLine(formatArgs(args)));
+  scrollTranscript();
+  return card;
 }
 
-function renderSources(messages) {
-  const section = document.createElement("section");
-  section.className = "sources";
+function formatArgs(args) {
+  const entries = Object.entries(args || {}).filter(([, value]) => value != null && value !== "");
+  if (entries.length === 0) return "(no arguments)";
+  return entries.map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`).join(" | ");
+}
 
-  const heading = document.createElement("h2");
-  heading.textContent = "Sources";
-  section.append(heading);
+// --- Rendering: sources side panel ------------------------------------------
 
-  for (const [index, message] of messages.entries()) {
-    const item = document.createElement("article");
-    item.className = "source";
+function renderActiveSources() {
+  const turn = state.activeTurn;
+  const list = turn?.list || [];
+  els.sourcesList.replaceChildren();
 
-    const meta = document.createElement("div");
-    meta.className = "source-meta";
-    meta.append(
-      span(`[${index + 1}]`),
-      span(formatDate(message.t)),
-      span(`#${message.ch || "unknown"}`),
-      span(message.a || "unknown"),
-    );
+  if (list.length === 0) {
+    els.sourcesEmpty.hidden = false;
+    return;
+  }
+  els.sourcesEmpty.hidden = true;
 
-    const content = document.createElement("p");
-    content.textContent = shorten(message.text || "(no message text)", 460);
+  for (const [index, message] of list.entries()) {
+    els.sourcesList.append(renderSourceCard(index + 1, message));
+  }
+}
 
-    const links = document.createElement("div");
-    links.className = "links";
-    if (message.url) links.append(link("Discord message", message.url));
-    if (message.replyUrl) links.append(link("Reply", message.replyUrl));
-    for (const attachment of message.at || []) {
-      const href = attachment.path ? `../${attachment.path}` : attachment.url;
-      if (href) links.append(link(attachment.name || "attachment", href));
-    }
+function renderSourceCard(n, message) {
+  const card = document.createElement("article");
+  card.className = "source";
+  card.dataset.n = String(n);
 
-    item.append(meta, content);
-    if (links.childElementCount > 0) item.append(links);
-    section.append(item);
+  const meta = document.createElement("div");
+  meta.className = "source-meta";
+  meta.append(
+    span(`[${n}]`, "source-index"),
+    span(formatDate(message.t)),
+    span(`#${message.ch || "unknown"}`),
+    span(message.a || "unknown"),
+  );
+
+  const content = document.createElement("p");
+  content.textContent = shorten(message.text || "(no message text)", 460);
+
+  const links = document.createElement("div");
+  links.className = "links";
+  if (message.url) links.append(link("Discord message", message.url));
+  if (message.replyUrl) links.append(link("Reply", message.replyUrl));
+  for (const attachment of message.at || []) {
+    const local = attachment.path ? `../${attachment.path}` : null;
+    // When local attachments are not published (Pages), prefer the Discord URL.
+    const href = SITE_CONFIG.attachmentsLocal === false
+      ? attachment.url || local
+      : local || attachment.url;
+    if (href) links.append(link(attachment.name || "attachment", href));
   }
 
-  return section;
+  card.append(meta, content);
+  if (links.childElementCount > 0) card.append(links);
+  return card;
 }
+
+function focusSource(n) {
+  const card = els.sourcesList.querySelector(`[data-n="${n}"]`);
+  if (!card) return;
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  card.classList.remove("flash");
+  void card.offsetWidth;
+  card.classList.add("flash");
+}
+
+// --- Small DOM helpers ------------------------------------------------------
 
 function messageShell(role) {
   const node = document.createElement("article");
@@ -844,14 +944,7 @@ function messageShell(role) {
   return node;
 }
 
-function smallNote(text) {
-  const note = document.createElement("p");
-  note.className = "note";
-  note.textContent = text;
-  return note;
-}
-
-function summary(text) {
+function summaryEl(text) {
   const element = document.createElement("summary");
   element.textContent = text;
   return element;
@@ -863,6 +956,24 @@ function codeLine(text) {
   element.textContent = text;
   return element;
 }
+
+function span(text, className) {
+  const element = document.createElement("span");
+  element.textContent = text;
+  if (className) element.className = className;
+  return element;
+}
+
+function link(text, href) {
+  const element = document.createElement("a");
+  element.textContent = text;
+  element.href = href;
+  element.target = "_blank";
+  element.rel = "noreferrer";
+  return element;
+}
+
+// --- Misc helpers -----------------------------------------------------------
 
 function tokenize(input) {
   return String(input)
@@ -901,7 +1012,7 @@ function statusText(prefix) {
 
 function showError(error) {
   setSummary(error.message);
-  appendAssistantMessage("Something went wrong while answering.", [], error.message);
+  appendNoticeMessage("Something went wrong while answering.", error.message);
   setBusy(false);
 }
 
@@ -909,32 +1020,35 @@ function includes(value, query) {
   return String(value || "").toLowerCase().includes(String(query).toLowerCase());
 }
 
-function span(text) {
-  const element = document.createElement("span");
-  element.textContent = text;
-  return element;
+function clampNumber(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(number)));
 }
 
-function link(text, href) {
-  const element = document.createElement("a");
-  element.textContent = text;
-  element.href = href;
-  element.target = "_blank";
-  element.rel = "noreferrer";
-  return element;
+function firstDefined(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null) return value;
+  }
+  return undefined;
+}
+
+function stableStringify(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${key}:${stableStringify(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function tail(text, max = 160) {
+  const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+  return cleaned.length <= max ? cleaned : `...${cleaned.slice(cleaned.length - max)}`;
 }
 
 function shorten(text, maxLength) {
   const cleaned = String(text).replace(/\s+/g, " ").trim();
   if (cleaned.length <= maxLength) return cleaned;
   return `${cleaned.slice(0, maxLength - 1)}...`;
-}
-
-function formatAttachmentNames(message) {
-  return (message.at || [])
-    .map((attachment) => attachment.name)
-    .filter(Boolean)
-    .join(", ");
 }
 
 function formatDate(value) {
@@ -944,6 +1058,6 @@ function formatDate(value) {
 
 function scrollTranscript() {
   requestAnimationFrame(() => {
-    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+    els.transcript.scrollTop = els.transcript.scrollHeight;
   });
 }
