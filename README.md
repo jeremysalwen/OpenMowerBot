@@ -16,9 +16,10 @@ The project uses DiscordChatExporter JSON as temporary raw input, normalizes it 
 - `build-browser-index`: writes static JSON message shards and lexical term buckets under `data/index/browser`.
 - `build-embeddings`: writes `data/index/embeddings.jsonl` with a local Transformers.js feature-extraction model when `@huggingface/transformers` is installed.
 - `search`: supports text matching, date range, author, channel, and attachment filters.
+- `context`: shows same-channel conversation around a message, or a channel time range.
 - `vector-search`: searches a precomputed `data/index/embeddings.jsonl` with a query vector.
 - `stats`: summarizes indexed corpus coverage.
-- The browser app loads `data/index/browser` and can answer from ranked evidence using built-in browser LLM support, WebLLM, or evidence-only mode.
+- The browser app loads `data/index/browser` and can answer from cited conversation context using built-in browser LLM support, WebLLM, Transformers.js, or evidence-only mode.
 
 ## Layout
 
@@ -62,6 +63,8 @@ From this directory:
 npm run build-corpus -- --raw data/raw --out data/corpus
 npm run stats -- --corpus data/corpus
 node ./bin/discord-history.mjs search --q "rtk gps" --channel mower --after 2023-01-01 --limit 10
+node ./bin/discord-history.mjs context --message-id 123456789012345678 --json
+node ./bin/discord-history.mjs context --channel open-mower --after 2024-01-01 --before 2024-01-02
 node ./bin/discord-history.mjs search --author "clemens" --has-attachment --json
 node ./bin/discord-history.mjs build-browser-index
 node ./bin/discord-history.mjs vector-search --vector-file query-vector.json --limit 10
@@ -97,7 +100,7 @@ Recommended repository policy:
 
 ## Browser Direction
 
-The browser app loads `data/index/browser/manifest.json`, fetches only the needed message/index shards, retrieves candidate messages with text search, and passes compact context to a pluggable local answer engine.
+The browser app loads `data/index/browser/manifest.json`, fetches only the needed message/index shards, and presents a chat interface. Internally it runs a bounded agent loop over browser tools such as `searchDiscord`, `getConversationContext`, and `getChannelRange` before passing cited evidence to a pluggable local answer engine.
 
 Answer engine adapters should be isolated behind one interface:
 
@@ -108,7 +111,7 @@ Answer engine adapters should be isolated behind one interface:
 
 The WebLLM and Transformers.js paths import libraries from CDN and download selected model artifacts into the browser cache on first use. They do not require a server-side model endpoint.
 
-Retrieval must not depend on the LLM adapter. That keeps local agents, static hosting, and future Chrome APIs compatible with the same corpus.
+Retrieval must not depend on the LLM adapter. Search should be used to find likely threads; answer generation should use expanded conversation context and channel ranges, not isolated matching messages. The browser agent should be free to make multiple tool calls before answering. That keeps local agents, static hosting, and future Chrome APIs compatible with the same corpus.
 
 ## Sources Checked
 

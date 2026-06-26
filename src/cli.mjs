@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { readJsonl } from "./jsonl.mjs";
 import { buildCorpusFromDiscordChatExporter, mergeCorpusDirs } from "./corpus.mjs";
-import { searchMessages, formatSearchResult } from "./search.mjs";
+import { searchMessages, getConversationContext, formatSearchResult, formatContextMessage } from "./search.mjs";
 import { buildEmbeddings, searchEmbeddings } from "./embeddings.mjs";
 import { buildBrowserIndex } from "./browser-index.mjs";
 import { runDiscordChatExporter } from "./exporter.mjs";
@@ -34,6 +34,9 @@ export async function main(argv) {
       break;
     case "search":
       await search(options);
+      break;
+    case "context":
+      await context(options);
       break;
     case "vector-search":
       await vectorSearch(options);
@@ -143,6 +146,29 @@ async function search(options) {
 
   for (const result of results) {
     console.log(formatSearchResult(result));
+  }
+}
+
+async function context(options) {
+  const corpusDir = path.resolve(options.corpus || options.index || "data/corpus");
+  const messages = await getConversationContext(corpusDir, {
+    messageId: options["message-id"] || options.messageId,
+    channel: options.channel,
+    around: options.around,
+    after: options.after,
+    before: options.before,
+    minutesBefore: options["minutes-before"] || options.minutesBefore,
+    minutesAfter: options["minutes-after"] || options.minutesAfter,
+    limit: options.limit || 80,
+  });
+
+  if (options.json) {
+    console.log(JSON.stringify(messages, null, 2));
+    return;
+  }
+
+  for (const message of messages) {
+    console.log(formatContextMessage(message));
   }
 }
 
@@ -269,6 +295,8 @@ Usage:
   discord-history build-browser-index
   discord-history build-embeddings --model Xenova/all-MiniLM-L6-v2
   discord-history search --q "gps fix" --channel general --after 2024-01-01
+  discord-history context --message-id 1234567890
+  discord-history context --channel general --after 2024-01-01 --before 2024-01-02
   discord-history vector-search --vector-file query-vector.json
   discord-history stats
 
@@ -286,6 +314,7 @@ Commands:
   build-embeddings
            Build data/index/embeddings.jsonl using @huggingface/transformers.
   search   Search the readable corpus with text and metadata filters.
+  context  Show same-channel conversation around a message or channel time range.
   vector-search
            Search data/index/embeddings.jsonl with a precomputed query vector.
   stats    Print corpus coverage from data/corpus/manifest.json.
@@ -329,6 +358,17 @@ Search filters:
   --attachment TEXT     Attachment filename, content type, or URL substring.
   --limit N             Result limit, default 20.
   --json                Print structured JSON results.
+
+Context:
+  --message-id ID       Center context around this Discord message id.
+  --channel TEXT        Channel id or name substring for time-range context.
+  --around DATE         Center time when not using --message-id.
+  --after DATE          Start of a channel time range.
+  --before DATE         End of a channel time range.
+  --minutes-before N    Minutes before --message-id/--around, default 45.
+  --minutes-after N     Minutes after --message-id/--around, default 45.
+  --limit N             Max context messages, default 80.
+  --json                Print structured JSON messages.
 
 Vector search:
   --vector JSON         Query vector as a JSON array or comma-separated numbers.

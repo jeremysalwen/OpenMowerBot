@@ -6,9 +6,10 @@ The system should combine three retrieval layers:
 
 1. Metadata filters: date, author, channel, attachment, pinned, bot/non-bot.
 2. Lexical search: exact terms, phrases, filenames, channel names.
-3. Semantic search: embeddings over message chunks and thread-sized windows.
+3. Conversation context: same-channel windows around a hit, or explicit channel time ranges.
+4. Semantic search: embeddings over message chunks and thread-sized windows.
 
-The current CLI implements layer 1, direct JSONL text search for layer 2, static browser lexical shards through `build-browser-index`, embedding generation through `build-embeddings`, and vector search over `data/index/embeddings.jsonl`.
+The current CLI implements layer 1, direct JSONL text search for layer 2, `context` for layer 3, static browser lexical shards through `build-browser-index`, embedding generation through `build-embeddings`, and vector search over `data/index/embeddings.jsonl`.
 
 ## Embedding Strategy
 
@@ -52,12 +53,14 @@ Potential adapters:
 The static page should:
 
 1. Load `data/index/browser/manifest.json`.
-2. Let the user enter a question and filters.
-3. Retrieve candidate messages from sharded lexical/vector indexes.
-4. Display evidence with channel, author, timestamp, and `messageUrl` links back to Discord.
-5. Optionally synthesize an answer through the selected local LLM adapter.
+2. Let the user chat with the corpus using optional filters.
+3. Run a bounded agent loop that may call retrieval tools repeatedly before answering.
+4. Use search tools to find likely messages from sharded lexical/vector indexes.
+5. Use context tools to retrieve same-channel surrounding conversation or explicit channel time ranges.
+6. Display cited evidence with channel, author, timestamp, and `messageUrl` links back to Discord.
+7. Optionally synthesize an answer through the selected local LLM adapter.
 
-The current static page supports Chrome built-in LLM APIs, WebLLM loaded from CDN, Transformers.js loaded from CDN, and evidence-only mode. WebLLM and Transformers.js download model artifacts on first use and then use the browser cache.
+The current static page supports a chat interface, Chrome built-in LLM APIs, WebLLM loaded from CDN, Transformers.js loaded from CDN, and evidence-only mode. WebLLM and Transformers.js download model artifacts on first use and then use the browser cache.
 
 Do not require a server process. Any preprocessing must happen before publishing.
 

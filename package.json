@@ -16,6 +16,7 @@
     "build-browser-index": "node ./bin/discord-history.mjs build-browser-index",
     "build-embeddings": "node ./bin/discord-history.mjs build-embeddings",
     "search": "node ./bin/discord-history.mjs search",
+    "context": "node ./bin/discord-history.mjs context",
     "vector-search": "node ./bin/discord-history.mjs vector-search",
     "stats": "node ./bin/discord-history.mjs stats"
   },
