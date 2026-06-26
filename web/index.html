@@ -17,6 +17,7 @@
           <div class="model-controls">
             <select id="answer-mode" aria-label="Answer model">
               <option value="auto">Auto local model</option>
+              <option value="api">Hosted API (OpenAI-compatible)</option>
               <optgroup label="WebLLM">
                 <option value="webllm:Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B</option>
                 <option value="webllm:Qwen2-0.5B-Instruct-q4f16_1-MLC">Qwen2 0.5B</option>
@@ -30,6 +31,19 @@
               <option value="built-in">Built-in browser model</option>
               <option value="evidence">Evidence only</option>
             </select>
+            <div id="api-settings" class="api-settings" hidden>
+              <input id="api-base-url" type="url" list="api-base-presets" autocomplete="off" spellcheck="false" placeholder="Base URL (e.g. https://api.openai.com/v1)" aria-label="API base URL">
+              <datalist id="api-base-presets">
+                <option value="https://api.openai.com/v1"></option>
+                <option value="https://openrouter.ai/api/v1"></option>
+                <option value="https://api.anthropic.com/v1"></option>
+                <option value="https://api.groq.com/openai/v1"></option>
+                <option value="http://localhost:11434/v1"></option>
+              </datalist>
+              <input id="api-model" type="text" autocomplete="off" spellcheck="false" placeholder="Model (e.g. gpt-4o-mini)" aria-label="API model">
+              <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="API key (kept in this browser)" aria-label="API key">
+              <p class="api-note">Key and settings are stored only in this browser's localStorage and sent directly to the endpoint you choose.</p>
+            </div>
           </div>
         </header>
 

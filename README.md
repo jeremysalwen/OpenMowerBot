@@ -7,6 +7,8 @@ DiscordHistory is a local-first archive and search project for the OpenMower Dis
 
 The project uses DiscordChatExporter JSON as temporary raw input, normalizes it to a compact readable corpus, and provides a dependency-free Node CLI for text and metadata search. Optional browser and embedding indexes can be generated from the corpus.
 
+> **Recommended way to get AI help with this data:** clone the repo and run an agent CLI — [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex) — inside the directory, then just ask your questions in natural language. `AGENTS.md` teaches the agent to use the bundled search CLI, so it can run focused searches, expand conversation context, and cite messages without any setup beyond cloning. The browser app and hosted-API options are conveniences for quick, no-install access; a local agent in the repo is the most capable path.
+
 ## Current Status
 
 - `export`: runs DiscordChatExporter locally or in CI. Incremental mode exports only messages after the committed corpus watermark.
@@ -19,7 +21,7 @@ The project uses DiscordChatExporter JSON as temporary raw input, normalizes it 
 - `context`: shows same-channel conversation around a message, or a channel time range.
 - `vector-search`: searches a precomputed `data/index/embeddings.jsonl` with a query vector.
 - `stats`: summarizes indexed corpus coverage.
-- The browser app loads `data/index/browser` and can answer from cited conversation context using built-in browser LLM support, WebLLM, Transformers.js, or evidence-only mode.
+- The browser app loads `data/index/browser` and can answer from cited conversation context using a hosted OpenAI-compatible API (your own key), built-in browser LLM support, WebLLM, Transformers.js, or evidence-only mode.
 
 ## Layout
 
@@ -109,10 +111,11 @@ Recommended repository policy:
 
 ## Browser Direction
 
-The browser app loads `data/index/browser/manifest.json`, fetches only the needed message/index shards, and presents a chat interface. It is a plain tool-calling agent: the selected local LLM decides, step by step, which browser tool to call (`search_messages`, `get_context`, `read_channel`) and answers once it has enough evidence. Cited sources are shown in a side panel, not baked into the answer text.
+The browser app loads `data/index/browser/manifest.json`, fetches only the needed message/index shards, and presents a chat interface. It is a plain tool-calling agent: the selected model (a local model or a hosted API model) decides, step by step, which browser tool to call (`search_messages`, `get_context`, `read_channel`) and answers once it has enough evidence. Cited sources are shown in a side panel, not baked into the answer text.
 
 Answer engine adapters should be isolated behind one interface:
 
+- A hosted OpenAI-compatible chat-completions API with a user-supplied base URL, model, and key, sent directly from the browser. The most reliable tool-caller available in-browser.
 - Chrome built-in Prompt API when available.
 - WebLLM through `@mlc-ai/web-llm` for browsers with WebGPU but no built-in LLM API.
 - Transformers.js through `@huggingface/transformers` for browsers without WebGPU, including Firefox configurations where `navigator.gpu` is unavailable.

@@ -42,6 +42,7 @@ await answerEngine.generate({
 
 Potential adapters:
 
+- Hosted OpenAI-compatible chat-completions API with a user-supplied base URL, model, and key (OpenAI, OpenRouter, Groq, Together, Anthropic's compatibility endpoint, or a local server). The request is sent directly from the browser, so the endpoint must allow CORS; the key is kept in the browser's `localStorage`.
 - Chrome built-in Prompt API when available.
 - WebLLM through `@mlc-ai/web-llm` for browsers with WebGPU but no built-in LLM API.
 - Transformers.js through `@huggingface/transformers` for browsers such as Firefox where WebGPU may be unavailable; this uses WASM/CPU by default.
