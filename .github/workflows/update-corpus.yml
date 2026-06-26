@@ -53,7 +53,9 @@ jobs:
             --incremental \
             --raw data/raw-incremental/latest \
             --exporter .cache/dce/DiscordChatExporter.Cli \
-            --parallel 8
+            --parallel 1 \
+            --retries 2 \
+            --retry-delay-seconds 60
 
       - name: Build incremental corpus
         run: |

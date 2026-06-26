@@ -33,12 +33,12 @@ The export command uses `%c.json` filenames to avoid path length failures from l
 For incremental updates after the initial corpus exists:
 
 ```bash
-npm run export -- --incremental --raw data/raw-incremental/latest --parallel 8
+npm run export -- --incremental --raw data/raw-incremental/latest --parallel 1 --retries 2 --retry-delay-seconds 60
 npm run build-corpus -- --raw data/raw-incremental/latest --out data/corpus-incremental --allow-empty
 npm run merge-corpus -- --base data/corpus --delta data/corpus-incremental --out data/corpus
 ```
 
-The GitHub Actions workflow runs those steps and commits only `data/corpus` plus selected attachments.
+The GitHub Actions workflow uses the lower incremental parallelism because Discord can return 429 responses while DiscordChatExporter is enumerating a large server and its threads. The retry flags rerun only after rate-limited exporter failures and wait at least the advertised Discord retry window.
 
 ## Attachment Policy
 
