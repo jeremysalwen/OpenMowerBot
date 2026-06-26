@@ -25,5 +25,8 @@
   },
   "optionalDependencies": {
     "@huggingface/transformers": "^4.2.0"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.61.1"
   }
 }
