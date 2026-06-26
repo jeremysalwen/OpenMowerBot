@@ -704,7 +704,7 @@ function replyHrefForMessage(message, channel, archiveLinks) {
 
     return {
       href,
-      label: "In reply to archived message",
+      label: "In reply to",
     };
   }
 
