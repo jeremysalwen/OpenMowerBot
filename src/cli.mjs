@@ -112,6 +112,7 @@ async function browserIndex(options) {
 
   console.log(`Built browser index with ${result.manifest.messageCount} messages.`);
   console.log(`Wrote ${result.manifestPath}`);
+  console.log(`Wrote ${result.archivePath}`);
 }
 
 async function embeddings(options) {
@@ -310,7 +311,7 @@ Commands:
   download-attachments
            Download selected small/useful attachments listed in the corpus.
   build-browser-index
-           Build static JSON shards and lexical term buckets for browser/local use.
+           Build static JSON shards, lexical term buckets, and HTML archive pages.
   build-embeddings
            Build data/index/embeddings.jsonl using @huggingface/transformers.
   search   Search the readable corpus with text and metadata filters.
@@ -342,6 +343,7 @@ Browser index:
   --out DIR             Output directory, default data/index/browser.
   --shard-size N        Messages per browser shard, default 1000.
   --max-postings N      Max postings retained per search term, default 50000.
+  --archive-page-size N Messages per static archive page, default 200.
 
 Embedding build:
   --model NAME          Transformers.js feature-extraction model, default Xenova/all-MiniLM-L6-v2.

@@ -1,6 +1,6 @@
 name: Deploy browser app
 
-# Publishes the static browser search/answer app to GitHub Pages.
+# Publishes the static browser search/answer app and static chat archive to GitHub Pages.
 # The browser index is rebuilt from the committed corpus on each deploy, so it
 # is never committed. Attachments are not published; attachment links fall back
 # to the original Discord CDN URLs.
@@ -54,16 +54,28 @@ jobs:
           mkdir -p _site/web _site/data/index
           cp -R web/. _site/web/
           cp -R data/index/browser _site/data/index/browser
+          cp -R data/index/browser/archive _site/archive
+          rm -rf _site/data/index/browser/archive
           # Attachments are not published to Pages; link to the Discord CDN.
           printf 'window.DISCORD_HISTORY_CONFIG = { attachmentsLocal: false };\n' > _site/web/config.js
-          # Make the bare Pages URL redirect into the app under /web/.
-          printf '%s\n' \
-            '<!doctype html>' \
-            '<meta charset="utf-8">' \
-            '<meta http-equiv="refresh" content="0; url=./web/">' \
-            '<title>OpenMower Discord Assistant</title>' \
-            '<a href="./web/">Open the OpenMower Discord Assistant</a>' \
-            > _site/index.html
+          # Make the bare Pages URL link to both static entry points.
+          cat > _site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>OpenMower Discord History</title>
+          <style>body{margin:0;font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f7f8fa;color:#1d2430}main{max-width:760px;margin:0 auto;padding:48px 20px}h1{font-size:2.6rem;line-height:1.05;margin:0 0 12px}.links{display:grid;gap:12px;margin-top:24px}.links a{display:block;padding:16px;border:1px solid #d9dee7;border-radius:8px;background:#fff;color:#0b5cad;font-weight:700}</style>
+          <main>
+            <h1>OpenMower Discord History</h1>
+            <p>Search the corpus with the browser assistant, or browse the static, indexable chat archive by channel and date.</p>
+            <div class="links">
+              <a href="./web/">Open the assistant</a>
+              <a href="./archive/">Browse the chat archive</a>
+            </div>
+          </main>
+          </html>
+          HTML
           touch _site/.nojekyll
 
       - name: Configure Pages

@@ -83,6 +83,9 @@ data/index/browser/manifest.json
 data/index/browser/messages/messages-000.json
 data/index/browser/messages/messages-001.json
 data/index/browser/search/terms-*.json
+data/index/browser/archive/index.html
+data/index/browser/archive/channels/<channel-slug>/page-001.html
+data/index/browser/archive/channels/<channel-slug>/dates.html
 data/index/vectors/vectors-*.bin
 ```
 
@@ -92,4 +95,4 @@ Generate the browser lexical index with:
 npm run build-browser-index
 ```
 
-The CLI can use the monolithic JSONL first. The browser should use sharded files to avoid loading the full corpus upfront.
+The CLI can use the monolithic JSONL first. The browser assistant should use sharded files to avoid loading the full corpus upfront. The generated archive pages are normal static HTML for GitHub Pages and search engines: one index page, channel index pages, paginated message pages, and per-channel date indexes.
