@@ -18,7 +18,7 @@ The project uses DiscordChatExporter JSON as temporary raw input, normalizes it 
 - `search`: supports text matching, date range, author, channel, and attachment filters.
 - `vector-search`: searches a precomputed `data/index/embeddings.jsonl` with a query vector.
 - `stats`: summarizes indexed corpus coverage.
-- The browser app is planned around `data/corpus` plus `data/index/browser` so it can work from static hosting.
+- The browser app loads `data/index/browser` and can answer from ranked evidence using built-in browser LLM support, WebLLM, or evidence-only mode.
 
 ## Layout
 
@@ -33,7 +33,7 @@ DiscordHistory/
   data/attachments/      Committed selected attachment files.
   data/media/            Local raw exporter media, ignored.
   data/index/            Derived heavier search/vector indexes.
-  web/                   Future static browser app.
+  web/                   Static browser search and local-answer page.
 ```
 
 ## Export
@@ -97,13 +97,15 @@ Recommended repository policy:
 
 ## Browser Direction
 
-The browser app should load `data/index/browser/manifest.json`, fetch only the needed message/index shards, retrieve candidate messages with text/vector search, and pass compact context to a pluggable local answer engine.
+The browser app loads `data/index/browser/manifest.json`, fetches only the needed message/index shards, retrieves candidate messages with text search, and passes compact context to a pluggable local answer engine.
 
 Answer engine adapters should be isolated behind one interface:
 
 - Chrome built-in Prompt API when available.
-- WebLLM or another WebGPU/WASM model for broader self-contained local inference.
+- WebLLM through `@mlc-ai/web-llm` for browsers with WebGPU but no built-in LLM API.
 - A disabled/no-LLM mode that still returns ranked evidence.
+
+The WebLLM path imports the library from CDN and downloads the selected model artifacts into the browser cache on first use. It does not require a server-side model endpoint.
 
 Retrieval must not depend on the LLM adapter. That keeps local agents, static hosting, and future Chrome APIs compatible with the same corpus.
 

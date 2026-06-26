@@ -39,11 +39,12 @@ body {
 }
 
 .filters {
-  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 150px 150px auto;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 150px 150px 140px 180px auto;
   margin-top: 8px;
 }
 
 input,
+select,
 button {
   min-height: 40px;
   border: 1px solid #b9c1cf;
@@ -51,7 +52,8 @@ button {
   font: inherit;
 }
 
-input {
+input,
+select {
   min-width: 0;
   padding: 0 10px;
   background: #ffffff;
