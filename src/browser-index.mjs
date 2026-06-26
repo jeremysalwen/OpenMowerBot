@@ -216,6 +216,8 @@ function compactArchiveMessage(message, ordinal) {
     authorNickname: message.authorNickname || null,
     authorIsBot: Boolean(message.authorIsBot),
     messageUrl: message.messageUrl || null,
+    replyToMessageId: message.replyToMessageId || null,
+    replyToChannelId: message.replyToChannelId || null,
     replyToMessageUrl: message.replyToMessageUrl || null,
     attachments: (message.attachments || []).map((attachment) => ({
       fileName: attachment.fileName || null,
@@ -237,15 +239,19 @@ async function writeStaticArchive(archiveDir, channelsMap, options) {
 
   assignChannelSlugs(channels);
   const hierarchy = buildArchiveHierarchy(channels);
+  const archiveOptions = {
+    ...options,
+    archiveLinks: buildArchiveMessageLinks(channels),
+  };
 
   let pageCount = 1;
   for (const channel of channels) {
-    pageCount += await writeChannelArchive(archiveDir, channel, options);
+    pageCount += await writeChannelArchive(archiveDir, channel, archiveOptions);
   }
 
   await fs.writeFile(
     path.join(archiveDir, "index.html"),
-    renderArchiveIndex(hierarchy, options),
+    renderArchiveIndex(hierarchy, archiveOptions),
   );
 
   return {
@@ -286,6 +292,7 @@ function prepareArchiveChannel(channel, pageSize) {
     pages.push(page);
 
     for (const message of messages) {
+      message.pageFile = page.file;
       const dayKey = dateKey(message.timestamp);
       if (!dayKey) continue;
 
@@ -340,6 +347,23 @@ function assignChannelSlugs(channels) {
     used.add(slug);
     channel.slug = slug;
   }
+}
+
+function buildArchiveMessageLinks(channels) {
+  const links = new Map();
+
+  for (const channel of channels) {
+    for (const message of channel.messages) {
+      if (!message.id || !message.pageFile) continue;
+      links.set(String(message.id), {
+        channelSlug: channel.slug,
+        file: message.pageFile,
+        anchor: messageAnchorId(message),
+      });
+    }
+  }
+
+  return links;
 }
 
 async function writeChannelArchive(archiveDir, channel, options) {
@@ -504,6 +528,7 @@ function renderChannelPage(channel, page, messages, options = {}) {
       <p>${escapeHtml(pageTitle)}. Page ${page.pageNumber} of ${channel.pageCount}. ${escapeHtml(formatDateRange(page.firstTimestamp, page.lastTimestamp))}.</p>
     </header>
     <main class="container">
+      ${renderReaderToolbar()}
       ${renderPager(channel, page, previousPage, nextPage)}
       <section class="messages" aria-label="Messages">
         ${messages.map((message) => {
@@ -512,9 +537,10 @@ function renderChannelPage(channel, page, messages, options = {}) {
             ? `<h2 class="day-heading" id="date-${escapeAttr(messageDay)}">${escapeHtml(formatDate(message.timestamp))}</h2>`
             : "";
           currentDay = messageDay || currentDay;
-          return `${dayHeading}${renderMessage(message)}`;
+          return `${dayHeading}${renderMessage(message, channel, options)}`;
         }).join("")}
       </section>
+      ${renderReaderToolbar()}
       ${renderPager(channel, page, previousPage, nextPage)}
     </main>
   `;
@@ -605,11 +631,18 @@ function renderPager(channel, page, previousPage, nextPage) {
   return `
     <nav class="pager" aria-label="Page navigation">
       ${previousPage ? `<a rel="prev" href="${escapeAttr(previousPage.file)}">Previous</a>` : `<span aria-disabled="true">Previous</span>`}
+      <span>Page ${page.pageNumber} of ${channel.pageCount}</span>
+      ${nextPage ? `<a rel="next" href="${escapeAttr(nextPage.file)}">Next</a>` : `<span aria-disabled="true">Next</span>`}
+    </nav>
+  `;
+}
+
+function renderReaderToolbar() {
+  return `
+    <nav class="toolbar reader-tools" aria-label="Reader navigation">
       <a href="index.html">Latest</a>
       <a href="pages.html">Pages</a>
       <a href="dates.html">Date index</a>
-      <span>Page ${page.pageNumber} of ${channel.pageCount}</span>
-      ${nextPage ? `<a rel="next" href="${escapeAttr(nextPage.file)}">Next</a>` : `<span aria-disabled="true">Next</span>`}
     </nav>
   `;
 }
@@ -628,12 +661,13 @@ function renderBreadcrumbs(items) {
   `;
 }
 
-function renderMessage(message) {
+function renderMessage(message, channel, options = {}) {
   const anchorId = messageAnchorId(message);
   const author = message.authorNickname || message.authorName || message.authorId || "unknown";
   const content = message.content ? `<div class="message-content">${renderContent(message.content)}</div>` : "";
-  const reply = message.replyToMessageUrl
-    ? `<p class="reply"><a href="${escapeAttr(message.replyToMessageUrl)}">In reply to another message</a></p>`
+  const replyHref = replyHrefForMessage(message, channel, options.archiveLinks);
+  const reply = replyHref
+    ? `<p class="reply"><a href="${escapeAttr(replyHref.href)}">${escapeHtml(replyHref.label)}</a></p>`
     : "";
   const discordLink = message.messageUrl
     ? `<a class="message-link" href="${escapeAttr(message.messageUrl)}">Discord</a>`
@@ -654,6 +688,27 @@ function renderMessage(message) {
       ${renderAttachments(message.attachments)}
     </article>
   `;
+}
+
+function replyHrefForMessage(message, channel, archiveLinks) {
+  const replyMessageId = message.replyToMessageId || messageIdFromDiscordUrl(message.replyToMessageUrl);
+  if (!replyMessageId) {
+    return null;
+  }
+
+  const target = archiveLinks?.get(String(replyMessageId));
+  if (target) {
+    const href = target.channelSlug === channel.slug
+      ? `${target.file}#${target.anchor}`
+      : `../${target.channelSlug}/${target.file}#${target.anchor}`;
+
+    return {
+      href,
+      label: "In reply to archived message",
+    };
+  }
+
+  return null;
 }
 
 function renderAttachments(attachments = []) {
@@ -1297,6 +1352,12 @@ function maxIso(current, next) {
 function safeHttpUrl(value) {
   const url = String(value || "").trim();
   return /^https?:\/\//i.test(url) ? url : "";
+}
+
+function messageIdFromDiscordUrl(value) {
+  const url = String(value || "").trim();
+  const match = url.match(/\/channels\/[^/]+\/[^/]+\/(\d+)/);
+  return match ? match[1] : null;
 }
 
 function escapeHtml(value) {
