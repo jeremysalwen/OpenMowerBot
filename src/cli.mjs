@@ -324,6 +324,9 @@ Export options:
   --after DATE_OR_ID    Override the incremental watermark.
   --raw DIR             Destination for raw DiscordChatExporter JSON.
   --parallel N          Channel export concurrency, default 8.
+  --retries N           Retry rate-limited exporter failures, default 0.
+  --retry-delay-seconds N
+                         Minimum wait before retrying a rate-limited export, default 60.
   --partition SIZE      Export partition size, default 25mb.
   --exporter PATH       DiscordChatExporter.Cli path.
   --media               Ask DiscordChatExporter to download media too.

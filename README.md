@@ -118,6 +118,8 @@ node ./bin/discord-history.mjs vector-search --vector-file query-vector.json --l
 
 The workflow exports only messages after `data/corpus/manifest.json`'s latest timestamp, builds a delta corpus, merges by message ID, downloads selected attachments, and commits `data/corpus` plus `data/attachments`. Run the full local export once before enabling scheduled updates so the repository has an initial watermark.
 
+The scheduled export intentionally uses lower DiscordChatExporter parallelism and rate-limit retries. Large guild exports can hit Discord 429 responses while channels and threads are enumerated, so unattended updates favor reliability over speed.
+
 ## Publishing
 
 Recommended repository policy:
