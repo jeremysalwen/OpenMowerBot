@@ -4,42 +4,51 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>OpenMower Discord Assistant</title>
-    <link rel="stylesheet" href="./styles.css?v=2026-06-26.7">
+    <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <main class="app">
-      <header class="topbar">
-        <div>
-          <h1>OpenMower Discord Assistant</h1>
-          <p id="summary">Loading index...</p>
-        </div>
-        <div class="model-controls">
-          <select id="answer-mode" aria-label="Answer model">
-            <option value="auto">Auto local model</option>
-            <optgroup label="WebLLM">
-              <option value="webllm:Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B</option>
-              <option value="webllm:Qwen2-0.5B-Instruct-q4f16_1-MLC">Qwen2 0.5B</option>
-              <option value="webllm:Llama-3.2-3B-Instruct-q4f16_1-MLC">Llama 3.2 3B</option>
-            </optgroup>
-            <optgroup label="Transformers.js">
-              <option value="transformers:onnx-community/SmolLM2-135M-Instruct-ONNX-MHA">SmolLM2 135M</option>
-              <option value="transformers:onnx-community/Qwen3-0.6B-ONNX">Qwen3 0.6B</option>
-              <option value="transformers:onnx-community/gemma-3-270m-it-ONNX">Gemma 3 270M</option>
-            </optgroup>
-            <option value="built-in">Built-in browser model</option>
-            <option value="evidence">Evidence only</option>
-          </select>
-        </div>
-      </header>
+    <div class="layout">
+      <main class="app">
+        <header class="topbar">
+          <div>
+            <h1>OpenMower Discord Assistant</h1>
+            <p id="summary">Loading index...</p>
+          </div>
+          <div class="model-controls">
+            <select id="answer-mode" aria-label="Answer model">
+              <option value="auto">Auto local model</option>
+              <optgroup label="WebLLM">
+                <option value="webllm:Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B</option>
+                <option value="webllm:Qwen2-0.5B-Instruct-q4f16_1-MLC">Qwen2 0.5B</option>
+                <option value="webllm:Llama-3.2-3B-Instruct-q4f16_1-MLC">Llama 3.2 3B</option>
+              </optgroup>
+              <optgroup label="Transformers.js">
+                <option value="transformers:onnx-community/SmolLM2-135M-Instruct-ONNX-MHA">SmolLM2 135M</option>
+                <option value="transformers:onnx-community/Qwen3-0.6B-ONNX">Qwen3 0.6B</option>
+                <option value="transformers:onnx-community/gemma-3-270m-it-ONNX">Gemma 3 270M</option>
+              </optgroup>
+              <option value="built-in">Built-in browser model</option>
+              <option value="evidence">Evidence only</option>
+            </select>
+          </div>
+        </header>
 
-      <section id="transcript" class="transcript" aria-live="polite"></section>
+        <section id="transcript" class="transcript" aria-live="polite"></section>
 
-      <form id="composer" class="composer">
-        <textarea id="query" rows="1" autocomplete="off" placeholder="Ask about the OpenMower Discord history"></textarea>
-        <button id="send" type="submit">Send</button>
-      </form>
-    </main>
+        <form id="composer" class="composer">
+          <textarea id="query" rows="1" autocomplete="off" placeholder="Ask about the OpenMower Discord history"></textarea>
+          <button id="send" type="submit">Send</button>
+        </form>
+      </main>
 
-    <script type="module" src="./app.js?v=2026-06-26.7"></script>
+      <aside class="sources-panel" aria-label="Sources">
+        <h2>Sources</h2>
+        <p id="sources-empty" class="sources-empty">Cited Discord messages will appear here.</p>
+        <div id="sources-list" class="sources-list"></div>
+      </aside>
+    </div>
+
+    <script src="./config.js"></script>
+    <script type="module" src="./app.js"></script>
   </body>
 </html>
