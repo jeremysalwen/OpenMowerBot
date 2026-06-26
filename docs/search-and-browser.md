@@ -65,7 +65,7 @@ The current static page is a model-driven tool-calling agent: the LLM emits one 
 
 Do not require a server process. Any preprocessing must happen before publishing.
 
-`.github/workflows/deploy-pages.yml` publishes the app and static archive to GitHub Pages: it rebuilds `data/index/browser` from the committed corpus, assembles `web/` with the JSON index as a sibling, copies the generated archive to `/archive/`, and deploys both. The browser index stays reproducible and uncommitted. Attachments are not published; the deploy sets `attachmentsLocal:false` in `web/config.js` so attachment links fall back to Discord CDN URLs. The generated archive is plain HTML with channel navigation, paginated message pages, and per-channel date indexes for human browsing and search engine indexing.
+`.github/workflows/deploy-pages.yml` publishes the app and static archive to GitHub Pages: it rebuilds `data/index/browser` from the committed corpus, assembles `web/` with the JSON index as a sibling, copies the generated archive to `/archive/`, and deploys both. The browser index stays reproducible and uncommitted. Attachments are not published; the deploy sets `attachmentsLocal:false` in `web/config.js` so attachment links fall back to Discord CDN URLs. The generated archive is plain HTML with section/channel/thread navigation, channel roots that open the latest messages, paginated message pages, and per-channel date indexes for human browsing and search engine indexing.
 
 ## Local Agent Compatibility
 

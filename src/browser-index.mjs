@@ -183,6 +183,8 @@ function addArchiveMessage(channels, message, ordinal) {
     channels.set(key, {
       id: message.channelId || null,
       name: message.channelName || "unknown",
+      type: message.channelType || null,
+      categoryId: message.categoryId || null,
       categoryName: message.categoryName || null,
       guildName: message.guildName || null,
       firstTimestamp: null,
@@ -193,6 +195,8 @@ function addArchiveMessage(channels, message, ordinal) {
   }
 
   const channel = channels.get(key);
+  if (!channel.type && message.channelType) channel.type = message.channelType;
+  if (!channel.categoryId && message.categoryId) channel.categoryId = message.categoryId;
   if (!channel.categoryName && message.categoryName) channel.categoryName = message.categoryName;
   if (!channel.guildName && message.guildName) channel.guildName = message.guildName;
   channel.firstTimestamp = minIso(channel.firstTimestamp, message.timestamp);
@@ -232,6 +236,7 @@ async function writeStaticArchive(archiveDir, channelsMap, options) {
     .map((channel) => prepareArchiveChannel(channel, options.pageSize));
 
   assignChannelSlugs(channels);
+  const hierarchy = buildArchiveHierarchy(channels);
 
   let pageCount = 1;
   for (const channel of channels) {
@@ -240,13 +245,15 @@ async function writeStaticArchive(archiveDir, channelsMap, options) {
 
   await fs.writeFile(
     path.join(archiveDir, "index.html"),
-    renderArchiveIndex(channels, options),
+    renderArchiveIndex(hierarchy, options),
   );
 
   return {
     root: "archive/index.html",
     pageSize: options.pageSize,
     channelCount: channels.length,
+    sectionCount: hierarchy.sections.length,
+    threadCount: hierarchy.threadCount,
     pageCount,
   };
 }
@@ -337,16 +344,26 @@ function assignChannelSlugs(channels) {
 
 async function writeChannelArchive(archiveDir, channel, options) {
   const channelDir = path.join(archiveDir, "channels", channel.slug);
+  const latestPage = channel.pages.at(-1);
   await fs.mkdir(channelDir, { recursive: true });
 
   await fs.writeFile(
-    path.join(channelDir, "index.html"),
+    path.join(channelDir, "pages.html"),
     renderChannelIndex(channel, options),
   );
   await fs.writeFile(
     path.join(channelDir, "dates.html"),
     renderDateIndex(channel, options),
   );
+  if (latestPage) {
+    await fs.writeFile(
+      path.join(channelDir, "index.html"),
+      renderChannelPage(channel, latestPage, channel.messages.slice(latestPage.start, latestPage.end), {
+        ...options,
+        rootAlias: true,
+      }),
+    );
+  }
 
   for (const page of channel.pages) {
     const messages = channel.messages.slice(page.start, page.end);
@@ -356,33 +373,24 @@ async function writeChannelArchive(archiveDir, channel, options) {
     );
   }
 
-  return channel.pages.length + 2;
+  return channel.pages.length + 3;
 }
 
-function renderArchiveIndex(channels, options) {
-  const totalMessages = channels.reduce((sum, channel) => sum + channel.messages.length, 0);
-  const grouped = groupChannelsByCategory(channels);
+function renderArchiveIndex(hierarchy, options) {
   const body = `
     <header class="site-header">
       <p class="eyebrow">OpenMower Discord History</p>
       <h1>Static Chat Archive</h1>
-      <p>${formatCount(totalMessages)} messages across ${formatCount(channels.length)} channels. Pick a channel to read paged, indexable chat history with date jumps.</p>
+      <p>${formatCount(hierarchy.messageCount)} messages across ${formatCount(hierarchy.channelCount)} channels and ${formatCount(hierarchy.threadCount)} threads. Pick a channel to open its latest messages, or browse dates and pages.</p>
       <p class="muted">Generated ${escapeHtml(formatDateTime(options.generatedAt))}</p>
     </header>
     <main class="container">
       <section class="toolbar" aria-label="Archive navigation">
-        <a href="#channels">Channels</a>
+        <a href="#sections">Sections</a>
       </section>
-      <section id="channels">
-        <h2>Channels</h2>
-        ${grouped.map(([categoryName, categoryChannels]) => `
-          <section class="category">
-            <h3>${escapeHtml(categoryName)}</h3>
-            <ol class="channel-list">
-              ${categoryChannels.map((channel) => renderChannelListItem(channel, "")).join("")}
-            </ol>
-          </section>
-        `).join("")}
+      <section id="sections">
+        <h2>Sections</h2>
+        ${hierarchy.sections.map((section) => renderSection(section, "")).join("")}
       </section>
     </main>
   `;
@@ -399,19 +407,16 @@ function renderChannelIndex(channel, options) {
   const firstPage = channel.pages[0];
   const latestPage = channel.pages.at(-1);
   const body = `
-    ${renderBreadcrumbs([
-      ["../../index.html", "All channels"],
-      [null, channelLabel(channel)],
-    ])}
+    ${renderBreadcrumbs(channelBreadcrumbItems(channel, "Pages"))}
     <header class="site-header compact">
-      <p class="eyebrow">${escapeHtml(channel.categoryName || "Channel")}</p>
+      <p class="eyebrow">${escapeHtml(channelEyebrow(channel))}</p>
       <h1>${escapeHtml(channelLabel(channel))}</h1>
       <p>${formatCount(channel.messages.length)} messages from ${escapeHtml(formatDate(channel.firstTimestamp))} to ${escapeHtml(formatDate(channel.lastTimestamp))}.</p>
     </header>
     <main class="container">
       <section class="toolbar" aria-label="Channel navigation">
         ${firstPage ? `<a href="${escapeAttr(firstPage.file)}">First page</a>` : ""}
-        ${latestPage ? `<a href="${escapeAttr(latestPage.file)}">Latest page</a>` : ""}
+        ${latestPage ? `<a href="index.html">Latest messages</a>` : ""}
         <a href="dates.html">Date index</a>
       </section>
       <section>
@@ -450,11 +455,7 @@ function renderDateIndex(channel) {
   }
 
   const body = `
-    ${renderBreadcrumbs([
-      ["../../index.html", "All channels"],
-      ["index.html", channelLabel(channel)],
-      [null, "Dates"],
-    ])}
+    ${renderBreadcrumbs(channelBreadcrumbItems(channel, "Dates"))}
     <header class="site-header compact">
       <p class="eyebrow">Date Index</p>
       <h1>${escapeHtml(channelLabel(channel))}</h1>
@@ -462,8 +463,8 @@ function renderDateIndex(channel) {
     </header>
     <main class="container">
       <section class="toolbar" aria-label="Channel navigation">
-        <a href="index.html">Channel index</a>
-        ${channel.pages.at(-1) ? `<a href="${escapeAttr(channel.pages.at(-1).file)}">Latest page</a>` : ""}
+        <a href="index.html">Latest messages</a>
+        <a href="pages.html">Pages</a>
       </section>
       ${[...daysByMonth.entries()].map(([month, days]) => `
         <section class="date-month">
@@ -489,21 +490,18 @@ function renderDateIndex(channel) {
   });
 }
 
-function renderChannelPage(channel, page, messages) {
+function renderChannelPage(channel, page, messages, options = {}) {
   const previousPage = channel.pages.find((candidate) => candidate.pageNumber === page.pageNumber - 1);
   const nextPage = channel.pages.find((candidate) => candidate.pageNumber === page.pageNumber + 1);
   let currentDay = null;
+  const pageTitle = options.rootAlias ? "Latest" : `Page ${page.pageNumber}`;
 
   const body = `
-    ${renderBreadcrumbs([
-      ["../../index.html", "All channels"],
-      ["index.html", channelLabel(channel)],
-      [null, `Page ${page.pageNumber}`],
-    ])}
+    ${renderBreadcrumbs(channelBreadcrumbItems(channel, options.rootAlias ? null : pageTitle, { channelCurrent: Boolean(options.rootAlias) }))}
     <header class="site-header compact">
-      <p class="eyebrow">${escapeHtml(channel.categoryName || "Channel")}</p>
+      <p class="eyebrow">${escapeHtml(channelEyebrow(channel))}</p>
       <h1>${escapeHtml(channelLabel(channel))}</h1>
-      <p>Page ${page.pageNumber} of ${channel.pageCount}. ${escapeHtml(formatDateRange(page.firstTimestamp, page.lastTimestamp))}.</p>
+      <p>${escapeHtml(pageTitle)}. Page ${page.pageNumber} of ${channel.pageCount}. ${escapeHtml(formatDateRange(page.firstTimestamp, page.lastTimestamp))}.</p>
     </header>
     <main class="container">
       ${renderPager(channel, page, previousPage, nextPage)}
@@ -522,26 +520,67 @@ function renderChannelPage(channel, page, messages) {
   `;
 
   return renderHtmlPage({
-    title: `${channelLabel(channel)} Page ${page.pageNumber} - OpenMower Discord Archive`,
+    title: `${channelLabel(channel)} ${pageTitle} - OpenMower Discord Archive`,
     description: `${channelLabel(channel)} Discord messages from ${formatDateRange(page.firstTimestamp, page.lastTimestamp)}.`,
     cssHref: "../../styles.css",
     body,
   });
 }
 
-function renderChannelListItem(channel, prefix) {
-  const latestPage = channel.pages.at(-1);
+function renderSection(section, prefix) {
+  return `
+    <section class="category">
+      <h3>${escapeHtml(section.name)}</h3>
+      <ol class="channel-list channel-tree">
+        ${section.channels.map((entry) => renderChannelTreeItem(entry, prefix)).join("")}
+      </ol>
+    </section>
+  `;
+}
+
+function renderChannelTreeItem(entry, prefix) {
+  const channel = entry.channel;
+  const summary = channel
+    ? `${formatCount(channel.messages.length)} messages, ${escapeHtml(formatDateRange(channel.firstTimestamp, channel.lastTimestamp))}`
+    : `${formatCount(entry.threadCount)} thread messages`;
+
   return `
     <li class="channel-card">
-      <div>
-        <a class="channel-title" href="${escapeAttr(prefix)}channels/${escapeAttr(channel.slug)}/">${escapeHtml(channelLabel(channel))}</a>
-        <p>${formatCount(channel.messages.length)} messages, ${escapeHtml(formatDateRange(channel.firstTimestamp, channel.lastTimestamp))}</p>
+      <div class="channel-main">
+        <div>
+          ${channel ? `<a class="channel-title" href="${escapeAttr(prefix)}channels/${escapeAttr(channel.slug)}/">${escapeHtml(channelLabel(channel))}</a>` : `<span class="channel-title">${escapeHtml(entry.name)}</span>`}
+          <p>${summary}</p>
+        </div>
+        ${channel ? renderArchiveActions(channel, prefix) : ""}
       </div>
-      <div class="channel-actions">
-        <a href="${escapeAttr(prefix)}channels/${escapeAttr(channel.slug)}/dates.html">Dates</a>
-        ${latestPage ? `<a href="${escapeAttr(prefix)}channels/${escapeAttr(channel.slug)}/${escapeAttr(latestPage.file)}">Latest</a>` : ""}
-      </div>
+      ${entry.threads.length > 0 ? `
+        <ol class="thread-list">
+          ${entry.threads.map((thread) => renderThreadListItem(thread, prefix)).join("")}
+        </ol>
+      ` : ""}
     </li>
+  `;
+}
+
+function renderThreadListItem(thread, prefix) {
+  return `
+    <li class="thread-row">
+      <div>
+        <span class="thread-label">Thread</span>
+        <a class="thread-title" href="${escapeAttr(prefix)}channels/${escapeAttr(thread.slug)}/">${escapeHtml(thread.name || thread.id || "thread")}</a>
+        <p>${formatCount(thread.messages.length)} messages, ${escapeHtml(formatDateRange(thread.firstTimestamp, thread.lastTimestamp))}</p>
+      </div>
+      ${renderArchiveActions(thread, prefix)}
+    </li>
+  `;
+}
+
+function renderArchiveActions(channel, prefix) {
+  return `
+    <div class="channel-actions">
+      <a href="${escapeAttr(prefix)}channels/${escapeAttr(channel.slug)}/pages.html">Pages</a>
+      <a href="${escapeAttr(prefix)}channels/${escapeAttr(channel.slug)}/dates.html">Dates</a>
+    </div>
   `;
 }
 
@@ -566,7 +605,8 @@ function renderPager(channel, page, previousPage, nextPage) {
   return `
     <nav class="pager" aria-label="Page navigation">
       ${previousPage ? `<a rel="prev" href="${escapeAttr(previousPage.file)}">Previous</a>` : `<span aria-disabled="true">Previous</span>`}
-      <a href="index.html">Channel index</a>
+      <a href="index.html">Latest</a>
+      <a href="pages.html">Pages</a>
       <a href="dates.html">Date index</a>
       <span>Page ${page.pageNumber} of ${channel.pageCount}</span>
       ${nextPage ? `<a rel="next" href="${escapeAttr(nextPage.file)}">Next</a>` : `<span aria-disabled="true">Next</span>`}
@@ -817,7 +857,43 @@ h3 {
   font-weight: 700;
 }
 
+.channel-main,
+.thread-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.channel-tree .channel-card {
+  display: block;
+}
+
+.thread-list {
+  list-style: none;
+  margin: 12px 0 0 4px;
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--line);
+}
+
+.thread-row {
+  padding: 8px 0;
+}
+
+.thread-label {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.thread-title {
+  font-weight: 650;
+}
+
 .channel-card p,
+.thread-row p,
 .page-list span,
 .month-list span,
 .date-list span {
@@ -937,6 +1013,8 @@ h3 {
   .page-list li,
   .month-list li,
   .date-list li,
+  .channel-main,
+  .thread-row,
   .message-header {
     display: block;
   }
@@ -961,15 +1039,117 @@ h3 {
 `;
 }
 
-function groupChannelsByCategory(channels) {
-  const groups = new Map();
+function buildArchiveHierarchy(channels) {
+  const byId = new Map(channels.filter((channel) => channel.id).map((channel) => [channel.id, channel]));
+  const sectionsByKey = new Map();
+  const entriesByChannelId = new Map();
+  const placeholderParents = new Map();
+  let threadCount = 0;
+  let channelCount = 0;
+  let messageCount = 0;
+
+  const getSection = (id, name) => {
+    const sectionName = name || "Uncategorized";
+    const key = id || `section:${sectionName}`;
+    if (!sectionsByKey.has(key)) {
+      sectionsByKey.set(key, {
+        id: id || null,
+        name: sectionName,
+        channels: [],
+      });
+    }
+    return sectionsByKey.get(key);
+  };
+
+  const sectionForChannel = (channel) => getSection(channel.categoryId, channel.categoryName || "Uncategorized");
+
+  const ensureChannelEntry = (channel) => {
+    if (entriesByChannelId.has(channel.id)) {
+      return entriesByChannelId.get(channel.id);
+    }
+
+    const section = sectionForChannel(channel);
+    const entry = {
+      id: channel.id,
+      name: channelLabel(channel),
+      channel,
+      threads: [],
+      threadCount: 0,
+    };
+    entriesByChannelId.set(channel.id, entry);
+    section.channels.push(entry);
+    return entry;
+  };
+
+  const ensurePlaceholderParent = (thread) => {
+    const parentId = thread.categoryId || "unknown-parent";
+    const parentName = thread.categoryName || "Unknown parent channel";
+    const key = parentId || parentName;
+    if (placeholderParents.has(key)) {
+      return placeholderParents.get(key);
+    }
+
+    const section = getSection(null, "Threads without exported parent channels");
+    const entry = {
+      id: parentId,
+      name: `#${parentName}`,
+      channel: null,
+      threads: [],
+      threadCount: 0,
+    };
+    placeholderParents.set(key, entry);
+    section.channels.push(entry);
+    return entry;
+  };
+
   for (const channel of channels) {
-    const category = channel.categoryName || "Uncategorized";
-    if (!groups.has(category)) groups.set(category, []);
-    groups.get(category).push(channel);
+    messageCount += channel.messages.length;
+
+    if (isThreadChannel(channel)) {
+      threadCount += 1;
+      continue;
+    }
+
+    channelCount += 1;
+    ensureChannelEntry(channel);
   }
 
-  return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right));
+  for (const thread of channels.filter(isThreadChannel)) {
+    const parent = byId.get(thread.categoryId);
+    const parentEntry = parent && !isThreadChannel(parent)
+      ? ensureChannelEntry(parent)
+      : ensurePlaceholderParent(thread);
+
+    thread.parentChannel = parent && !isThreadChannel(parent) ? parent : null;
+    parentEntry.threads.push(thread);
+    parentEntry.threadCount += thread.messages.length;
+  }
+
+  const sections = [...sectionsByKey.values()]
+    .map((section) => ({
+      ...section,
+      channels: section.channels
+        .map((entry) => ({
+          ...entry,
+          threads: entry.threads.sort(compareChannels),
+        }))
+        .sort(compareHierarchyEntries),
+    }))
+    .filter((section) => section.channels.length > 0)
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+  return {
+    sections,
+    sectionCount: sections.length,
+    channelCount,
+    threadCount,
+    messageCount,
+  };
+}
+
+function compareHierarchyEntries(left, right) {
+  return String(left.channel?.name || left.name || "").localeCompare(String(right.channel?.name || right.name || ""))
+    || String(left.id || "").localeCompare(String(right.id || ""));
 }
 
 function compareChannels(left, right) {
@@ -987,6 +1167,36 @@ function compareArchiveMessages(left, right) {
 function channelLabel(channel) {
   const name = channel.name || channel.id || "unknown";
   return `#${name}`;
+}
+
+function channelEyebrow(channel) {
+  if (isThreadChannel(channel)) {
+    return channel.parentChannel
+      ? `Thread in ${channelLabel(channel.parentChannel)}`
+      : `Thread in ${channel.categoryName || "unknown channel"}`;
+  }
+
+  return channel.categoryName || "Channel";
+}
+
+function channelBreadcrumbItems(channel, currentLabel = null, options = {}) {
+  const items = [["../../index.html", "All channels"]];
+
+  if (isThreadChannel(channel) && channel.parentChannel) {
+    items.push([`../${channel.parentChannel.slug}/`, channelLabel(channel.parentChannel)]);
+  }
+
+  items.push([options.channelCurrent ? null : "index.html", channelLabel(channel)]);
+
+  if (currentLabel) {
+    items.push([null, currentLabel]);
+  }
+
+  return items;
+}
+
+function isThreadChannel(channel) {
+  return /Thread/i.test(String(channel.type || ""));
 }
 
 function pageFileName(pageNumber, width) {
