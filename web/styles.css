@@ -39,7 +39,7 @@ body {
 }
 
 .filters {
-  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 150px 150px 140px 180px auto;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 150px 150px 140px 180px 190px auto;
   margin-top: 8px;
 }
 

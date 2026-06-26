@@ -43,6 +43,7 @@ Potential adapters:
 
 - Chrome built-in Prompt API when available.
 - WebLLM through `@mlc-ai/web-llm` for browsers with WebGPU but no built-in LLM API.
+- Transformers.js through `@huggingface/transformers` for browsers such as Firefox where WebGPU may be unavailable; this uses WASM/CPU by default.
 - Local CLI adapter to call an agent/model available on the developer machine.
 - No-op adapter that returns ranked evidence only.
 
@@ -56,7 +57,7 @@ The static page should:
 4. Display evidence with channel, author, timestamp, and `messageUrl` links back to Discord.
 5. Optionally synthesize an answer through the selected local LLM adapter.
 
-The current static page supports Chrome built-in LLM APIs, WebLLM loaded from CDN, and evidence-only mode. WebLLM downloads model artifacts on first use and then uses the browser cache.
+The current static page supports Chrome built-in LLM APIs, WebLLM loaded from CDN, Transformers.js loaded from CDN, and evidence-only mode. WebLLM and Transformers.js download model artifacts on first use and then use the browser cache.
 
 Do not require a server process. Any preprocessing must happen before publishing.
 

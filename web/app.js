@@ -1,6 +1,8 @@
 const INDEX_ROOT = "../data/index/browser/";
 const WEBLLM_IMPORT_URL = "https://esm.run/@mlc-ai/web-llm";
+const TRANSFORMERS_IMPORT_URL = "https://esm.run/@huggingface/transformers";
 const DEFAULT_WEBLLM_MODEL = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
+const DEFAULT_TRANSFORMERS_MODEL = "onnx-community/SmolLM2-135M-Instruct-ONNX-MHA";
 const MAX_RESULTS = 40;
 const MAX_CANDIDATES = 600;
 const ANSWER_EVIDENCE_LIMIT = 12;
@@ -12,6 +14,9 @@ const state = {
   webllm: null,
   webllmEngine: null,
   webllmModel: null,
+  transformers: null,
+  transformersGenerator: null,
+  transformersModel: null,
 };
 
 const els = {
@@ -23,6 +28,7 @@ const els = {
   attachments: document.querySelector("#attachments"),
   engine: document.querySelector("#engine"),
   webllmModel: document.querySelector("#webllm-model"),
+  transformersModel: document.querySelector("#transformers-model"),
   search: document.querySelector("#search"),
   answer: document.querySelector("#answer"),
   summary: document.querySelector("#summary"),
@@ -217,6 +223,18 @@ async function generateAnswer(question, evidence) {
     }
   }
 
+  if (requested === "transformers" || requested === "auto") {
+    try {
+      const generator = await createTransformersGenerator();
+      if (generator) {
+        setSummary("Answering with Transformers.js...");
+        return await promptTransformers(generator, question, evidence);
+      }
+    } catch (error) {
+      return `Transformers.js failed: ${error.message}\n\n${formatEvidenceOnly(evidence)}`;
+    }
+  }
+
   return "No local browser LLM is available. Showing ranked evidence instead.\n\n"
     + formatEvidenceOnly(evidence);
 }
@@ -237,7 +255,7 @@ async function promptBuiltInModel(model, prompt) {
 
 async function createWebLLMEngine() {
   if (!("gpu" in navigator)) {
-    showAnswer("WebLLM requires WebGPU. Showing ranked evidence instead.");
+    showAnswer("WebLLM requires WebGPU. Trying the Transformers.js WASM fallback instead.");
     return null;
   }
 
@@ -265,6 +283,32 @@ async function createWebLLMEngine() {
   return state.webllmEngine;
 }
 
+async function createTransformersGenerator() {
+  const selectedModel = els.transformersModel.value || DEFAULT_TRANSFORMERS_MODEL;
+  if (state.transformersGenerator && state.transformersModel === selectedModel) {
+    return state.transformersGenerator;
+  }
+
+  setSummary("Loading Transformers.js...");
+  showAnswer("Loading Transformers.js. The first model download can take several minutes and is cached by the browser. Firefox uses the WASM/CPU backend unless WebGPU is enabled.");
+
+  state.transformers = state.transformers || await import(TRANSFORMERS_IMPORT_URL);
+  state.transformersModel = selectedModel;
+  state.transformersGenerator = await state.transformers.pipeline("text-generation", selectedModel, {
+    dtype: "q4",
+    progress_callback: (progress) => {
+      const file = progress?.file ? ` ${progress.file}` : "";
+      const percent = Number.isFinite(progress?.progress)
+        ? ` ${Math.round(progress.progress)}%`
+        : "";
+      const status = progress?.status || "loading";
+      setSummary(`Transformers.js ${status}${file}${percent}`);
+    },
+  });
+
+  return state.transformersGenerator;
+}
+
 async function promptWebLLM(engine, question, evidence) {
   const chunks = await engine.chat.completions.create({
     messages: buildChatMessages(question, evidence),
@@ -282,12 +326,39 @@ async function promptWebLLM(engine, question, evidence) {
   return answer.trim() || "The local model returned an empty answer.";
 }
 
+async function promptTransformers(generator, question, evidence) {
+  const prompt = buildPlainTextPrompt(question, evidence);
+  const result = await generator(prompt, {
+    max_new_tokens: 450,
+    temperature: 0.2,
+    do_sample: false,
+    return_full_text: false,
+  });
+
+  return extractGeneratedText(result).trim() || "The local model returned an empty answer.";
+}
+
 function buildAnswerPrompt(question, messages) {
   const evidence = messages.map((message, index) => {
     return `[${index + 1}] ${message.t} #${message.ch} ${message.a}: ${message.text}\n${message.url || ""}`;
   }).join("\n\n");
 
   return `Answer the question using only the Discord evidence below. Include source numbers and Discord links when useful.\n\nQuestion: ${question}\n\nEvidence:\n${evidence}`;
+}
+
+function buildPlainTextPrompt(question, evidence) {
+  return [
+    "Answer using only the Discord evidence below.",
+    "Cite source numbers and include Discord links when useful.",
+    "If the evidence is insufficient, say so.",
+    "",
+    `Question: ${question || "(no question provided)"}`,
+    "",
+    "Evidence:",
+    formatEvidenceForPrompt(evidence),
+    "",
+    "Answer:",
+  ].join("\n");
 }
 
 function buildChatMessages(question, evidence) {
@@ -321,6 +392,23 @@ function formatEvidenceOnly(messages) {
     const text = (message.text || "").replace(/\s+/g, " ").trim();
     return `[${index + 1}] ${message.t || "unknown"} #${message.ch || "unknown"} ${message.a || "unknown"}\n${text}\n${message.url || ""}`;
   }).join("\n\n");
+}
+
+function extractGeneratedText(result) {
+  if (typeof result === "string") return result;
+  if (Array.isArray(result)) {
+    return result.map(extractGeneratedText).filter(Boolean).join("\n");
+  }
+  if (result && typeof result.generated_text === "string") {
+    return result.generated_text;
+  }
+  if (result && Array.isArray(result.generated_text)) {
+    return result.generated_text
+      .map((message) => message?.content || "")
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
 }
 
 function showAnswer(text) {

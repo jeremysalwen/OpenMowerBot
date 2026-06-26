@@ -103,9 +103,10 @@ Answer engine adapters should be isolated behind one interface:
 
 - Chrome built-in Prompt API when available.
 - WebLLM through `@mlc-ai/web-llm` for browsers with WebGPU but no built-in LLM API.
+- Transformers.js through `@huggingface/transformers` for browsers without WebGPU, including Firefox configurations where `navigator.gpu` is unavailable.
 - A disabled/no-LLM mode that still returns ranked evidence.
 
-The WebLLM path imports the library from CDN and downloads the selected model artifacts into the browser cache on first use. It does not require a server-side model endpoint.
+The WebLLM and Transformers.js paths import libraries from CDN and download selected model artifacts into the browser cache on first use. They do not require a server-side model endpoint.
 
 Retrieval must not depend on the LLM adapter. That keeps local agents, static hosting, and future Chrome APIs compatible with the same corpus.
 

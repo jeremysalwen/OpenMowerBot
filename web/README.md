@@ -18,6 +18,7 @@ The page supports lexical search, channel/author/date/attachment filters, Discor
 
 - Chrome's built-in local LLM API when available.
 - WebLLM loaded from CDN with a browser-cached WebGPU model.
+- Transformers.js loaded from CDN with a browser-cached ONNX model.
 - Evidence-only mode when no local LLM is available.
 
-WebLLM does not require built-in browser LLM support, but it does require WebGPU. The first model load downloads model artifacts and can take several minutes.
+WebLLM does not require built-in browser LLM support, but it does require WebGPU. Firefox builds without WebGPU should use Auto LLM or Transformers.js mode, which runs through WASM/CPU by default. The first model load downloads model artifacts and can take several minutes.
