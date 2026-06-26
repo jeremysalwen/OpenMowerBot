@@ -53,7 +53,7 @@ Potential adapters:
 The static page should:
 
 1. Load `data/index/browser/manifest.json`.
-2. Let the user chat with the corpus using optional filters.
+2. Let the user chat with the corpus without a separate search/filter form.
 3. Run a bounded agent loop that may call retrieval tools repeatedly before answering.
 4. Use search tools to find likely messages from sharded lexical/vector indexes.
 5. Use context tools to retrieve same-channel surrounding conversation or explicit channel time ranges.
