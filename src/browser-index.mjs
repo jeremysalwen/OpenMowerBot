@@ -1028,6 +1028,60 @@ h3 {
   white-space: normal;
 }
 
+.message-content blockquote {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-left: 4px solid var(--line);
+  color: var(--muted);
+  background: #f9fafb;
+}
+
+.message-content pre {
+  overflow-x: auto;
+  margin: 10px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #111827;
+  color: #f9fafb;
+  white-space: pre-wrap;
+}
+
+.message-content code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #eef2f7;
+  font: 0.92em ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+.message-content pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.mention,
+.emoji-text {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--link-bg);
+  color: var(--link);
+  font-weight: 650;
+}
+
+.spoiler {
+  border-radius: 4px;
+  background: #1f2937;
+  color: transparent;
+  cursor: help;
+}
+
+.spoiler:hover,
+.spoiler:focus {
+  color: #f9fafb;
+}
+
 .attachments {
   list-style: none;
   padding: 0;
@@ -1311,20 +1365,154 @@ function formatBytes(bytes) {
 
 function renderContent(content) {
   const text = String(content || "");
-  const urlPattern = /\bhttps?:\/\/[^\s<>"']+/gi;
+  const fencePattern = /```([^\n`]*)\n?([\s\S]*?)```/g;
   let rendered = "";
   let lastIndex = 0;
 
-  for (const match of text.matchAll(urlPattern)) {
-    const url = match[0];
+  for (const match of text.matchAll(fencePattern)) {
     const index = match.index || 0;
-    rendered += escapeHtml(text.slice(lastIndex, index));
-    rendered += `<a href="${escapeAttr(url)}">${escapeHtml(url)}</a>`;
-    lastIndex = index + url.length;
+    rendered += renderDiscordText(text.slice(lastIndex, index));
+    rendered += renderCodeBlock(match[2] || "", match[1] || "");
+    lastIndex = index + match[0].length;
   }
 
-  rendered += escapeHtml(text.slice(lastIndex));
-  return rendered.replace(/\r\n|\r|\n/g, "<br>");
+  rendered += renderDiscordText(text.slice(lastIndex));
+  return rendered;
+}
+
+function renderDiscordText(text) {
+  const lines = String(text || "").replace(/\r\n|\r/g, "\n").split("\n");
+  let rendered = "";
+  let regularLines = [];
+
+  const flushRegularLines = () => {
+    if (regularLines.length === 0) return;
+    rendered += regularLines.map(renderDiscordInline).join("<br>");
+    regularLines = [];
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const multiLineQuote = lines[index].match(/^>>>\s?(.*)$/);
+    if (multiLineQuote) {
+      flushRegularLines();
+      rendered += renderBlockQuote([multiLineQuote[1], ...lines.slice(index + 1)]);
+      return rendered;
+    }
+
+    const quote = lines[index].match(/^>\s?(.*)$/);
+    if (quote) {
+      flushRegularLines();
+      const quoteLines = [quote[1]];
+      while (index + 1 < lines.length) {
+        const nextQuote = lines[index + 1].match(/^>\s?(.*)$/);
+        if (!nextQuote) break;
+        quoteLines.push(nextQuote[1]);
+        index += 1;
+      }
+      rendered += renderBlockQuote(quoteLines);
+      continue;
+    }
+
+    regularLines.push(lines[index]);
+  }
+
+  flushRegularLines();
+  return rendered;
+}
+
+function renderBlockQuote(lines) {
+  return `<blockquote>${lines.map(renderDiscordInline).join("<br>")}</blockquote>`;
+}
+
+function renderCodeBlock(code, language) {
+  const cleanLanguage = String(language || "").trim().replace(/[^\w.+-]+/g, " ").trim();
+  const languageLabel = cleanLanguage ? ` data-language="${escapeAttr(cleanLanguage)}"` : "";
+  return `<pre${languageLabel}><code>${escapeHtml(code.replace(/^\n|\n$/g, ""))}</code></pre>`;
+}
+
+function renderDiscordInline(text) {
+  const input = String(text || "");
+  const codePattern = /`([^`\n]+)`/g;
+  let rendered = "";
+  let lastIndex = 0;
+
+  for (const match of input.matchAll(codePattern)) {
+    const index = match.index || 0;
+    rendered += renderDiscordInlineSegment(input.slice(lastIndex, index));
+    rendered += `<code>${escapeHtml(match[1])}</code>`;
+    lastIndex = index + match[0].length;
+  }
+
+  rendered += renderDiscordInlineSegment(input.slice(lastIndex));
+  return rendered;
+}
+
+function renderDiscordInlineSegment(text) {
+  const tokens = [];
+  let rendered = escapeHtml(text);
+
+  rendered = renderMaskedLinks(rendered, tokens);
+  rendered = renderMentions(rendered, tokens);
+  rendered = renderCustomEmoji(rendered, tokens);
+  rendered = renderInlineStyles(rendered);
+  rendered = linkifyUrls(rendered, tokens);
+
+  return restoreHtmlTokens(rendered, tokens);
+}
+
+function renderMaskedLinks(text, tokens) {
+  return text.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (match, label, url) => {
+    if (!safeHttpUrl(url)) return match;
+    return htmlToken(tokens, `<a href="${url}">${label}</a>`);
+  });
+}
+
+function renderMentions(text, tokens) {
+  return text
+    .replace(/&lt;@!?(\d+)&gt;/g, (_, id) => htmlToken(tokens, `<span class="mention">@${escapeHtml(id)}</span>`))
+    .replace(/&lt;@&amp;(\d+)&gt;/g, (_, id) => htmlToken(tokens, `<span class="mention">@role-${escapeHtml(id)}</span>`))
+    .replace(/&lt;#(\d+)&gt;/g, (_, id) => htmlToken(tokens, `<span class="mention">#${escapeHtml(id)}</span>`));
+}
+
+function renderCustomEmoji(text, tokens) {
+  return text.replace(/&lt;a?:([\w-]+):\d+&gt;/g, (_, name) => (
+    htmlToken(tokens, `<span class="emoji-text">:${escapeHtml(name)}:</span>`)
+  ));
+}
+
+function renderInlineStyles(text) {
+  return text
+    .replace(/\*\*\*([^*\n]+?)\*\*\*/g, "<strong><em>$1</em></strong>")
+    .replace(/___([^_\n]+?)___/g, "<u><em>$1</em></u>")
+    .replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_\n]+?)__/g, "<u>$1</u>")
+    .replace(/~~([^~\n]+?)~~/g, "<del>$1</del>")
+    .replace(/\|\|([^|\n]+?)\|\|/g, '<span class="spoiler" tabindex="0">$1</span>')
+    .replace(/(^|[^\w])\*([^*\n]+?)\*(?=$|[^\w])/g, "$1<em>$2</em>")
+    .replace(/(^|[^\w])_([^_\n]+?)_(?=$|[^\w])/g, "$1<em>$2</em>");
+}
+
+function linkifyUrls(text, tokens) {
+  return text.replace(/\bhttps?:\/\/[^\s<]+/gi, (rawUrl) => {
+    const [url, suffix] = splitTrailingUrlPunctuation(rawUrl);
+    if (!safeHttpUrl(url)) return rawUrl;
+    return `${htmlToken(tokens, `<a href="${url}">${url}</a>`)}${suffix}`;
+  });
+}
+
+function splitTrailingUrlPunctuation(url) {
+  const match = String(url).match(/^(.+?)([.,!?;:\])]+)?$/);
+  return [match?.[1] || url, match?.[2] || ""];
+}
+
+function htmlToken(tokens, html) {
+  const index = tokens.length;
+  tokens.push(html);
+  return `\u0000${index}\u0000`;
+}
+
+function restoreHtmlTokens(text, tokens) {
+  return text.replace(/\u0000(\d+)\u0000/g, (match, index) => tokens[Number(index)] || match);
 }
 
 function messageAnchorId(message) {
