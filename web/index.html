@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OpenMower Discord History</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app">
+      <section class="toolbar" aria-label="Search controls">
+        <div class="query-row">
+          <input id="query" type="search" autocomplete="off" placeholder="Search the OpenMower Discord history">
+          <button id="search" type="button">Search</button>
+          <button id="answer" type="button">Answer</button>
+        </div>
+        <div class="filters">
+          <input id="channel" type="text" autocomplete="off" placeholder="Channel">
+          <input id="author" type="text" autocomplete="off" placeholder="Author">
+          <input id="after" type="date" aria-label="After date">
+          <input id="before" type="date" aria-label="Before date">
+          <label class="check">
+            <input id="attachments" type="checkbox">
+            <span>Attachments</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="status" aria-live="polite">
+        <span id="summary">Loading index...</span>
+      </section>
+
+      <section id="answer-panel" class="answer-panel" hidden></section>
+      <section id="results" class="results" aria-label="Search results"></section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

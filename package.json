@@ -1,0 +1,28 @@
+{
+  "name": "discord-history",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Export, normalize, and search the OpenMower Discord history for local agents and static browser use.",
+  "bin": {
+    "discord-history": "./bin/discord-history.mjs"
+  },
+  "scripts": {
+    "export": "node ./bin/discord-history.mjs export",
+    "ingest": "node ./bin/discord-history.mjs ingest",
+    "build-corpus": "node ./bin/discord-history.mjs build-corpus",
+    "merge-corpus": "node ./bin/discord-history.mjs merge-corpus",
+    "download-attachments": "node ./bin/discord-history.mjs download-attachments",
+    "build-browser-index": "node ./bin/discord-history.mjs build-browser-index",
+    "build-embeddings": "node ./bin/discord-history.mjs build-embeddings",
+    "search": "node ./bin/discord-history.mjs search",
+    "vector-search": "node ./bin/discord-history.mjs vector-search",
+    "stats": "node ./bin/discord-history.mjs stats"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@huggingface/transformers": "^4.2.0"
+  }
+}

@@ -1,0 +1,153 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f7f8fa;
+  color: #20242a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
+}
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 16px;
+  background: #ffffff;
+  border-bottom: 1px solid #d9dee7;
+}
+
+.query-row,
+.filters {
+  display: grid;
+  gap: 8px;
+}
+
+.query-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.filters {
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 150px 150px auto;
+  margin-top: 8px;
+}
+
+input,
+button {
+  min-height: 40px;
+  border: 1px solid #b9c1cf;
+  border-radius: 6px;
+  font: inherit;
+}
+
+input {
+  min-width: 0;
+  padding: 0 10px;
+  background: #ffffff;
+}
+
+button {
+  padding: 0 14px;
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+button:disabled {
+  background: #8b949e;
+  border-color: #8b949e;
+  cursor: wait;
+}
+
+.check {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid #b9c1cf;
+  border-radius: 6px;
+  background: #ffffff;
+  white-space: nowrap;
+}
+
+.status {
+  padding: 10px 16px;
+  color: #59636e;
+  border-bottom: 1px solid #e4e8ef;
+  background: #fbfcfe;
+}
+
+.answer-panel {
+  padding: 16px;
+  border-bottom: 1px solid #d9dee7;
+  background: #ffffff;
+  white-space: pre-wrap;
+}
+
+.results {
+  display: grid;
+  align-content: start;
+}
+
+.result {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e4e8ef;
+  background: #ffffff;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #59636e;
+  font-size: 13px;
+}
+
+.content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.links,
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+}
+
+a {
+  color: #0a58ca;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 760px) {
+  .query-row,
+  .filters {
+    grid-template-columns: 1fr;
+  }
+
+  button {
+    width: 100%;
+  }
+}
