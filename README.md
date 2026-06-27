@@ -27,7 +27,7 @@ A static page, no install. Open the hosted app:
 Type a question; it runs the same searches in your browser and answers with cited sources listed in a side panel. Pick an answer model in the top-right:
 
 - **Hosted API (OpenAI-compatible)** — bring your own base URL, model, and key (OpenAI, OpenRouter, Groq, Anthropic's compatibility endpoint, a local server, …). The most reliable option; the key stays in your browser.
-- **Built-in / WebLLM / Transformers.js** — local models that run entirely in the browser (no key, but smaller and less reliable).
+- **Built-in / WebLLM / Transformers.js** — local models that run entirely in the browser (no key, but smaller and less reliable). The explicit WebLLM and Transformers.js choices are curated by approximate size from the practical browser model frontier for this tool-calling harness.
 - **Evidence only** — skips the LLM and just lists the top matching messages.
 
 To run it locally instead, serve the repo root and open `/web/`:

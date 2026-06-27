@@ -1,0 +1,40 @@
+{%- for message in messages %}
+  {%- if message.role == "system" %}
+    {{- "<|system|>" + message.content }}
+    {%- if tools is defined and tools is not none %}
+      {{- "<|tool|>[" }}
+      {%- for tool in tools %}
+        {%- set declaration = tool.function if tool.function is defined else tool %}
+        {{- (declaration | tojson) + ("," if not loop.last else "") }}
+      {%- endfor %}
+      {{- "]<|/tool|>" }}
+    {%- endif %}
+    {{- "<|end|>" }}
+  {%- elif message.role == "user" %}
+    {{- "<|user|>" + message.content + "<|end|>" }}
+  {%- elif message.role == "assistant" %}
+    {{- "<|assistant|>" }}
+    {%- if message.tool_calls %}
+      {{- "<|tool_call|>[" }}
+      {%- for tool_call in message.tool_calls %}
+        {%- set call = tool_call.function if tool_call.function is defined else tool_call %}
+        {{- '{"name":' + (call.name | tojson) + ',"arguments":' }}
+        {%- if call.arguments is mapping %}
+          {{- call.arguments | tojson }}
+        {%- else %}
+          {{- call.arguments }}
+        {%- endif %}
+        {{- "}" + ("," if not loop.last else "") }}
+      {%- endfor %}
+      {{- "]<|/tool_call|>" }}
+    {%- else %}
+      {{- message.content }}
+    {%- endif %}
+    {{- "<|end|>" }}
+  {%- elif message.role == "tool" %}
+    {{- "<|tool_response|>" + message.content + "<|end|>" }}
+  {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+  {{- "<|assistant|>" }}
+{%- endif %}

@@ -6,15 +6,16 @@ import {
   extractGeneratedText,
   toManualConversation,
 } from "./agent.js";
+import { openAiChat } from "./openai-chat.js";
 
 const INDEX_ROOT = "../data/index/browser/";
-const WEBLLM_IMPORT_URL = "https://esm.run/@mlc-ai/web-llm";
-const TRANSFORMERS_IMPORT_URL = "https://esm.run/@huggingface/transformers";
-const DEFAULT_WEBLLM_MODEL = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
+const WEBLLM_IMPORT_URL = "https://esm.run/@mlc-ai/web-llm@0.2.84";
+const TRANSFORMERS_IMPORT_URL = "https://esm.run/@huggingface/transformers@4.2.0";
+const DEFAULT_WEBLLM_MODEL = "Qwen3-0.6B-q4f16_1-MLC";
 // Qwen3-0.6B is the smallest Transformers.js model that reliably drives native
 // tool calling; the 135M/270M models are too small to call tools well.
 const DEFAULT_TRANSFORMERS_MODEL = "onnx-community/Qwen3-0.6B-ONNX";
-const APP_VERSION = "2026-06-26.10";
+const APP_VERSION = "2026-06-27.13";
 // Optional build-time site config. The GitHub Pages deploy sets
 // attachmentsLocal:false because attachments are not published to Pages.
 const SITE_CONFIG = (typeof window !== "undefined" && window.DISCORD_HISTORY_CONFIG) || {};
@@ -223,20 +224,31 @@ async function loadEngine(kind, mode, note) {
     // model we fall back to the manual prompt+parse protocol, the same text
     // path the Transformers.js engine uses.
     const native = supportsWebLLMTools(state.webllmModel);
+    const textProtocol = webLLMTextToolProtocol(state.webllmModel);
+    const constrainedObservation = /^(?:Qwen3\.5-4B|Hermes-3-Llama-3\.1-8B)/i.test(state.webllmModel || "");
+    const generation = {
+      temperature: 0,
+      max_tokens: textProtocol === "qwen35" && !constrainedObservation ? 768 : 384,
+      ...(constrainedObservation ? { extra_body: { enable_thinking: false } } : {}),
+      ...(textProtocol === "phi4" ? { stop: "<|/tool_call|>" } : {}),
+    };
     const complete = (request) => guardWebLLM(engine.chat.completions.create(request));
     return {
-      label: `WebLLM ${state.webllmModel}${native ? "" : " (manual tools)"}`,
+      label: `WebLLM ${state.webllmModel}${native ? "" : textProtocol ? " (native text tools)" : " (manual tools)"}`,
+      ...(constrainedObservation ? { observationBudget: { maxMessages: 3, snippetLength: 120 } } : {}),
       async chat(messages, { tools } = {}) {
         if (native && tools) {
           const response = await complete({
-            messages,
+            // WebLLM's Hermes function-calling template owns the system turn
+            // and rejects any caller-supplied system message.
+            messages: messages.filter((message) => message.role !== "system"),
             tools,
             tool_choice: "auto",
-            temperature: 0.2,
-            max_tokens: 1024,
+            ...generation,
           });
           const message = response.choices[0]?.message || {};
           const toolCalls = (message.tool_calls || []).map((call) => ({
+            id: call.id,
             name: call.function?.name,
             arguments: parseJsonArgs(call.function?.arguments),
           }));
@@ -245,9 +257,8 @@ async function loadEngine(kind, mode, note) {
         // Manual mode: describe tools in the prompt, flatten tool/assistant
         // messages the Llama/Qwen templates can't take, and parse the text.
         const response = await complete({
-          messages: tools ? toManualConversation(messages, tools) : messages,
-          temperature: 0.2,
-          max_tokens: 1024,
+          messages: tools ? toManualConversation(messages, tools, textProtocol) : messages,
+          ...generation,
         });
         return { text: response.choices[0]?.message?.content || "" };
       },
@@ -259,6 +270,7 @@ async function loadEngine(kind, mode, note) {
     if (!generator) return null;
     return {
       label: `Transformers.js ${state.transformersModel}`,
+      toolCallArguments: "object",
       // Tools are rendered into the chat template; the model emits its native
       // tool-call markup as text, which the agent parses. The larger budget
       // leaves room for reasoning models (Qwen3) to think and still call a
@@ -283,12 +295,10 @@ async function loadEngine(kind, mode, note) {
   return null;
 }
 
-// Hosted OpenAI-compatible chat completions engine. Works with OpenAI,
-// OpenRouter, Groq, Together, Anthropic's compatibility endpoint, and local
-// servers (Ollama/LM Studio/llama.cpp). The request goes directly from the
-// browser to the chosen endpoint; that endpoint must allow CORS. Tools are
-// driven through the same manual prompt+parse protocol the local text engines
-// use, so the model emits <tool_call> markup the agent parses.
+// Hosted OpenAI-compatible chat completions engine. The request goes directly
+// from the browser to the endpoint, which must allow CORS. Preserve structured
+// tool calls and their ids so this path exercises the model/runtime's native
+// tool protocol just like an independent OpenAI client does.
 function createApiEngine(config) {
   const baseUrl = (config.baseUrl || "").replace(/\/+$/, "");
   const model = config.model || "";
@@ -299,64 +309,9 @@ function createApiEngine(config) {
   return {
     label: `API ${model}`,
     async chat(messages, { tools, onDelta } = {}) {
-      const convo = tools ? toManualConversation(messages, tools) : messages;
-      const text = await openAiChat({ baseUrl, model, apiKey, messages: convo, onDelta });
-      return { text };
+      return openAiChat({ baseUrl, model, apiKey, messages, tools, onDelta });
     },
   };
-}
-
-async function openAiChat({ baseUrl, model, apiKey, messages, onDelta }) {
-  const headers = { "content-type": "application/json" };
-  if (apiKey) headers.authorization = `Bearer ${apiKey}`;
-  // Anthropic's OpenAI-compatible endpoint needs this header for browser calls.
-  if (/anthropic\.com/.test(baseUrl)) headers["anthropic-dangerous-direct-browser-access"] = "true";
-
-  let response;
-  try {
-    response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ model, messages, temperature: 0.2, max_tokens: 1024, stream: true }),
-    });
-  } catch (error) {
-    throw new Error(`Could not reach ${baseUrl} (network or CORS error). ${error.message}`);
-  }
-
-  if (!response.ok || !response.body) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(`API request failed (HTTP ${response.status}). ${shorten(detail, 300)}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let out = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      const payload = trimmed.slice(5).trim();
-      if (!payload || payload === "[DONE]") continue;
-      let json;
-      try {
-        json = JSON.parse(payload);
-      } catch {
-        continue; // keep-alive comment or split frame
-      }
-      const delta = json.choices?.[0]?.delta?.content || "";
-      if (delta) {
-        out += delta;
-        onDelta?.(out);
-      }
-    }
-  }
-  return out.trim();
 }
 
 function parseJsonArgs(value) {
@@ -487,10 +442,28 @@ function hasWebGPU() {
   return Boolean(globalThis.navigator?.gpu);
 }
 
-// WebLLM accepts the OpenAI `tools` param only for these function-calling
-// models; all others throw "not supported for ChatCompletionRequest.tools".
+// WebLLM accepts the OpenAI `tools` param only for a narrow allow-list exported
+// by the package. Keep a local fallback for CDN/version oddities; do not use a
+// broad Hermes regex, because not every Hermes model in WebLLM supports tools.
+const WEBLLM_NATIVE_TOOL_MODELS = new Set([
+  "Hermes-2-Pro-Llama-3-8B-q4f16_1-MLC",
+  "Hermes-2-Pro-Llama-3-8B-q4f32_1-MLC",
+  "Hermes-2-Pro-Mistral-7B-q4f16_1-MLC",
+  "Hermes-3-Llama-3.1-8B-q4f32_1-MLC",
+  "Hermes-3-Llama-3.1-8B-q4f16_1-MLC",
+]);
+
 function supportsWebLLMTools(modelName) {
-  return /^Hermes-/i.test(modelName || "");
+  const upstream = state.webllm?.functionCallingModelIds;
+  if (Array.isArray(upstream)) return upstream.includes(modelName);
+  return WEBLLM_NATIVE_TOOL_MODELS.has(modelName);
+}
+
+function webLLMTextToolProtocol(modelName) {
+  if (/^Qwen3\.5-/i.test(modelName || "")) return "qwen35";
+  if (/^Hermes-/i.test(modelName || "")) return "hermes";
+  if (/^Phi-4-mini/i.test(modelName || "")) return "phi4";
+  return "";
 }
 
 // A large model (e.g. Llama 3.2 3B) can exhaust GPU memory or exceed the OS GPU
