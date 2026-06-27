@@ -192,26 +192,94 @@ export function manualToolInstructions(schemas) {
 // messages) into plain system/user/assistant turns for a manual-mode engine
 // whose chat template does not accept the tool role. The first system message
 // gets the manual tool instructions appended.
-export function toManualConversation(messages, schemas) {
+export function toManualConversation(messages, schemas, protocol = "generic") {
   const out = [];
   let injected = false;
+  const instructions = protocol === "qwen35" ? qwen35ToolInstructions(schemas) : manualToolInstructions(schemas);
   for (const message of messages) {
     if (message.role === "system") {
-      out.push({ role: "system", content: `${message.content}\n${manualToolInstructions(schemas)}` });
+      out.push({
+        role: "system",
+        content: protocol === "phi4"
+          ? `${message.content}<|tool|>${phi4Declarations(schemas)}<|/tool|>`
+          : `${instructions}\n\n${message.content}`,
+      });
       injected = true;
     } else if (message.role === "tool") {
-      out.push({ role: "user", content: `Tool result:\n${message.content}` });
+      out.push({
+        role: "user",
+        content: protocol === "phi4"
+          ? `<|tool_response|>${message.content}`
+          : protocol === "qwen35" || protocol === "hermes"
+          ? `<tool_response>\n${message.content}\n</tool_response>`
+          : `Tool result:\n${message.content}`,
+      });
     } else if (message.role === "assistant" && message.tool_calls?.length) {
       const calls = message.tool_calls
-        .map((call) => `<tool_call>${JSON.stringify({ name: call.function.name, arguments: safeParse(call.function.arguments) })}</tool_call>`)
+        .map((call) => {
+          const parsedArguments = safeParse(call.function.arguments);
+          if (protocol === "qwen35") return qwen35ToolCall(call.function.name, parsedArguments);
+          if (protocol === "phi4") {
+            return `<|tool_call|>${JSON.stringify([{ name: call.function.name, arguments: parsedArguments }])}<|/tool_call|>`;
+          }
+          return `<tool_call>${JSON.stringify({ name: call.function.name, arguments: parsedArguments })}</tool_call>`;
+        })
         .join("\n");
       out.push({ role: "assistant", content: message.content ? `${message.content}\n${calls}` : calls });
     } else {
       out.push({ role: message.role, content: message.content });
     }
   }
-  if (!injected) out.unshift({ role: "system", content: manualToolInstructions(schemas).trim() });
+  if (!injected) {
+    out.unshift({
+      role: "system",
+      content: protocol === "phi4" ? `<|tool|>${phi4Declarations(schemas)}<|/tool|>` : instructions.trim(),
+    });
+  }
   return out;
+}
+
+function phi4Declarations(schemas) {
+  return JSON.stringify(schemas.map((schema) => schema.function || schema));
+}
+
+export function qwen35ToolInstructions(schemas) {
+  return [
+    "# Tools",
+    "",
+    "You have access to the following functions:",
+    "",
+    "<tools>",
+    ...schemas.map((schema) => JSON.stringify(schema)),
+    "</tools>",
+    "",
+    "If you choose to call a function, reply with no suffix in this exact format:",
+    "<tool_call>",
+    "<function=example_function_name>",
+    "<parameter=example_parameter_name>",
+    "value",
+    "</parameter>",
+    "</function>",
+    "</tool_call>",
+    "",
+    "<IMPORTANT>",
+    "Reminder:",
+    "- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags",
+    "- Required parameters MUST be specified",
+    "- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after",
+    "- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls",
+    "</IMPORTANT>",
+  ].join("\n");
+}
+
+function qwen35ToolCall(name, args) {
+  const parameters = Object.entries(args || {})
+    .map(([key, value]) => {
+      const rendered = value && typeof value === "object" ? JSON.stringify(value) : String(value ?? "");
+      return `<parameter=${key}>\n${rendered}\n</parameter>`;
+    })
+    .join("\n");
+  return `<tool_call>\n<function=${name}>\n${parameters}\n</function>\n</tool_call>`;
 }
 
 function safeParse(value) {
@@ -233,11 +301,12 @@ export function stripThink(raw) {
 }
 
 // Extract tool calls from a model's raw text. Handles the common formats the
-// supported models emit: Hermes/Qwen <tool_call>{...}</tool_call>, Llama-style
+// supported models emit: Hermes/Qwen <tool_call>{...}</tool_call>, Qwen 3.5's
+// nested <function>/<parameter> XML, FunctionGemma markers, Llama-style
 // {"name":...,"parameters":...} or {"name":...,"arguments":...}, and fenced
 // ```json blocks. Returns [{ name, arguments }].
 export function parseToolCalls(rawText, validNames) {
-  const text = String(rawText || "");
+  const text = stripThink(rawText);
   const calls = [];
   const seen = new Set();
 
@@ -253,42 +322,116 @@ export function parseToolCalls(rawText, validNames) {
 
   // 1) Explicit <tool_call> tags (Qwen, Hermes, SmolLM2).
   const tagRe = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi;
+  const toolTagBodies = [];
   let m;
   let sawTag = false;
   while ((m = tagRe.exec(text))) {
     sawTag = true;
+    toolTagBodies.push(m[1]);
     const obj = tryParseJson(m[1]);
-    if (obj) push(obj.name ?? obj.tool ?? obj.tool_name, obj.arguments ?? obj.parameters ?? obj.args);
+    for (const item of Array.isArray(obj) ? obj : [obj]) {
+      if (item) push(item.name ?? item.tool ?? item.tool_name, item.arguments ?? item.parameters ?? item.args);
+    }
   }
   if (sawTag && calls.length) return calls;
 
-  // 1b) XML-attribute tool calls, e.g. small Llama models emit
-  //     <search_messages query="rtk gps" limit="10"/> instead of JSON.
-  const xmlRe = /<([a-z_][\w-]*)\b([^>]*?)\/?>/gi;
-  while ((m = xmlRe.exec(text))) {
-    const name = canonicalToolName(m[1], validNames);
-    if (!name) continue;
-    const args = {};
-    const attrRe = /([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/g;
-    let a;
-    while ((a = attrRe.exec(m[2]))) {
-      const value = a[2] ?? a[3] ?? a[4] ?? "";
-      args[a[1]] = value;
+  // 1a) Qwen 3.5 nests a named function and one tag per parameter inside
+  //     <tool_call>, rather than putting a JSON object in that tag.
+  for (const body of toolTagBodies) {
+    const functionRe = /<function\s*=\s*["']?([\w.-]+)["']?\s*>([\s\S]*?)<\/function\s*>/gi;
+    while ((m = functionRe.exec(body))) {
+      const args = {};
+      const parameterRe = /<parameter\s*=\s*["']?([\w.-]+)["']?\s*>([\s\S]*?)<\/parameter\s*>/gi;
+      let parameter;
+      while ((parameter = parameterRe.exec(m[2]))) {
+        args[parameter[1]] = parseTaggedValue(parameter[2]);
+      }
+      push(m[1], args);
     }
-    push(name, args);
+  }
+  if (calls.length) return calls;
+
+  // Phi-4 mini uses special-token tags around a JSON array.
+  const pipeTagRe = /<\|tool_call\|>\s*([\s\S]*?)\s*<\|\/tool_call\|>/gi;
+  while ((m = pipeTagRe.exec(text))) {
+    const parsed = tryParseJson(m[1]);
+    for (const item of Array.isArray(parsed) ? parsed : [parsed]) {
+      if (item) push(item.name, item.arguments ?? item.parameters ?? item.args);
+    }
+  }
+  if (calls.length) return calls;
+
+  // 1d) Ministral 3 emits one or more unclosed token-delimited calls:
+  //     [TOOL_CALLS]search_messages[ARGS]{"query":"rtk"}
+  const ministralRe = /\[TOOL_CALLS\]\s*([^\[\]\s]+)\s*\[ARGS\]\s*/gi;
+  while ((m = ministralRe.exec(text))) {
+    const argsText = scanBraceGroups(text.slice(ministralRe.lastIndex))[0];
+    push(m[1], tryParseJson(argsText) || {});
+  }
+  if (calls.length) return calls;
+
+  // 1b) FunctionGemma's native call syntax is
+  //     <start_function_call>call:name{arg:<escape>value<escape>}...
+  const functionGemmaRe = /<start_function_call>\s*call\s*:\s*([\w.-]+)\s*\{([\s\S]*?)\}\s*<end_function_call>/gi;
+  while ((m = functionGemmaRe.exec(text))) {
+    const args = {};
+    const argumentRe = /([\w.-]+)\s*:\s*(?:<escape>([\s\S]*?)<escape>|([^,}]*))(?:,|$)/g;
+    let argument;
+    while ((argument = argumentRe.exec(m[2]))) {
+      args[argument[1]] = parseTaggedValue(argument[2] ?? argument[3]);
+    }
+    push(m[1], args);
+  }
+  if (calls.length) return calls;
+
+  // 1c) XML-attribute tool calls, e.g. small Llama models emit
+  //     <search_messages query="rtk gps" limit="10"/> instead of JSON.
+  const xmlRe = /^<([a-z_][\w-]*)\b([^>]*?)\/?>$/i;
+  if ((m = xmlRe.exec(text.trim()))) {
+    const name = canonicalToolName(m[1], validNames);
+    if (name) {
+      const args = {};
+      const attrRe = /([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/g;
+      let a;
+      while ((a = attrRe.exec(m[2]))) {
+        const value = a[2] ?? a[3] ?? a[4] ?? "";
+        args[a[1]] = value;
+      }
+      push(name, args);
+    }
+  }
+  if (calls.length) return calls;
+
+  // Some small Hermes MLC builds omit only the <tool_call> wrapper and emit
+  // `search_messages{"name":"search_messages",...}`. Recover this narrow
+  // whole-response form, requiring the prefix and JSON name to agree.
+  const prefixedJson = /^([a-z_][\w-]*)\s*(\{[\s\S]*\})$/i.exec(text.trim());
+  if (prefixedJson) {
+    const prefix = canonicalToolName(prefixedJson[1], validNames);
+    const obj = tryParseJson(prefixedJson[2]);
+    const objectName = canonicalToolName(obj?.name ?? obj?.tool ?? obj?.tool_name, validNames);
+    if (prefix && objectName === prefix) push(prefix, obj.arguments ?? obj.parameters ?? obj.args);
   }
   if (calls.length) return calls;
 
   // 2) Bare/fenced JSON objects that look like a tool call.
   for (const candidate of jsonCandidates(text)) {
-    const obj = tryParseJson(candidate);
-    if (!obj || typeof obj !== "object") continue;
-    const name = obj.name ?? obj.tool ?? obj.tool_name ?? obj.function?.name;
-    if (!name) continue;
-    const args = obj.arguments ?? obj.parameters ?? obj.args ?? obj.function?.arguments;
-    push(name, args);
+    const parsed = tryParseJson(candidate);
+    for (const obj of Array.isArray(parsed) ? parsed : [parsed]) {
+      if (!obj || typeof obj !== "object") continue;
+      const name = obj.name ?? obj.tool ?? obj.tool_name ?? obj.function?.name;
+      if (!name) continue;
+      const args = obj.arguments ?? obj.parameters ?? obj.args ?? obj.function?.arguments;
+      push(name, args);
+    }
   }
   return calls;
+}
+
+function parseTaggedValue(value) {
+  const text = String(value ?? "").trim();
+  const parsed = tryParseJson(text);
+  return parsed === null ? text : parsed;
 }
 
 function coerceArgs(value) {
@@ -300,9 +443,13 @@ function coerceArgs(value) {
 
 function jsonCandidates(text) {
   const candidates = [];
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) candidates.push(fenced[1]);
-  for (const group of scanBraceGroups(text)) candidates.push(group);
+  const fencedRe = /```(?:json|tool_code)?\s*([\s\S]*?)```/gi;
+  let fenced;
+  while ((fenced = fencedRe.exec(text))) candidates.push(fenced[1]);
+  const visible = text.trim();
+  if ((visible.startsWith("{") && visible.endsWith("}")) || (visible.startsWith("[") && visible.endsWith("]"))) {
+    candidates.push(visible);
+  }
   return candidates;
 }
 
@@ -353,6 +500,8 @@ function tryParseJson(text) {
 export function cleanAnswer(raw) {
   let text = stripThink(raw)
     .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "")
+    .replace(/<start_function_call>[\s\S]*?<end_function_call>/gi, "")
+    .replace(/\[TOOL_CALLS\][^\[\]\s]+\[ARGS\]\s*\{[^{}]*\}/gi, "")
     .replace(/<\|[^|]*\|>/g, "")
     .replace(/```(?:json|tool_code)?/gi, "")
     .replace(/```/g, "");
@@ -426,17 +575,19 @@ export function flattenMessages(messages) {
 export const OBSERVATION_MAX_MESSAGES = 6;
 const OBSERVATION_SNIPPET = 180;
 
-export function formatObservation(numbered, result) {
+export function formatObservation(numbered, result, options = {}) {
   if (result.error) return `Error: ${result.error}`;
   if (!numbered.length) return "No messages found. Try different search terms or filters.";
-  const shown = numbered.slice(0, OBSERVATION_MAX_MESSAGES);
+  const maxMessages = options.maxMessages || OBSERVATION_MAX_MESSAGES;
+  const snippetLength = options.snippetLength || OBSERVATION_SNIPPET;
+  const shown = numbered.slice(0, maxMessages);
   const more = numbered.length - shown.length;
   const header = more > 0
     ? `${numbered.length} message(s) found; showing the top ${shown.length}:`
     : `${numbered.length} message(s) found:`;
   const lines = [header];
   for (const { n, message } of shown) {
-    lines.push(`[${n}] ${formatDate(message.t)} | #${message.ch || "unknown"} | ${message.a || "unknown"}: ${shorten(message.text || "(no text)", OBSERVATION_SNIPPET)}`);
+    lines.push(`[${n}] ${formatDate(message.t)} | #${message.ch || "unknown"} | ${message.a || "unknown"}: ${shorten(message.text || "(no text)", snippetLength)}`);
   }
   // A directive at the decision point. Controlled tests showed small models
   // copy this list verbatim unless explicitly told to synthesise, and invent
@@ -484,7 +635,7 @@ export async function runAgentTurn({ question, engine, tools, hooks = {}, maxSte
     const numbered = registerEvidence(result.messages || []);
     hooks.onEvidence?.(evidence.list);
     hooks.finishToolCall?.(card, name, args, result.error ? "error" : "done", numbered.length);
-    const observation = formatObservation(numbered, result);
+    const observation = formatObservation(numbered, result, engine.observationBudget);
     hooks.onObservation?.(observation);
     return observation;
   };
@@ -495,10 +646,18 @@ export async function runAgentTurn({ question, engine, tools, hooks = {}, maxSte
   // "John Doe", ...), so sentinel values are dropped before the tool runs.
   const readReply = (reply) => {
     const content = reply.content ?? reply.text ?? "";
-    const rawCalls = reply.toolCalls ?? parseToolCalls(content, validNames);
+    const structuredCalls = (reply.toolCalls || []).filter((call) => {
+      const name = canonicalToolName(call.name, validNames);
+      return name && call.arguments != null;
+    });
+    const rawCalls = structuredCalls.length ? structuredCalls : parseToolCalls(content, validNames);
     const toolCalls = rawCalls
-      .filter((call) => tools[call.name])
-      .map((call) => ({ name: call.name, arguments: sanitizeArgs(call.arguments) }));
+      .map((call) => ({
+        id: call.id,
+        name: canonicalToolName(call.name, validNames),
+        arguments: sanitizeArgs(call.arguments),
+      }))
+      .filter((call) => call.name && tools[call.name]);
     return { content, toolCalls };
   };
 
@@ -528,18 +687,28 @@ export async function runAgentTurn({ question, engine, tools, hooks = {}, maxSte
 
     // One tool call per step: most chat templates (e.g. Llama 3.2) only allow a
     // single tool call per assistant message, and it keeps the loop legible.
-    // Strip the model's <think> scratch reasoning before storing it: a reasoning
-    // model (Qwen3) emits a long think block that, re-fed every later step,
-    // bloats the KV cache enough to OOM (std::bad_alloc) the WASM runtime.
-    const call = toolCalls[0];
-    conversation.push(assistantToolCalls(stripThink(content), [call]));
+    // Store only the structured call. Keeping the model's raw call markup in
+    // content makes tokenizer templates render the same call twice, while
+    // retaining reasoning also needlessly bloats the constrained browser KV.
+    const call = { ...toolCalls[0], id: toolCalls[0].id || `call_${step}` };
+    conversation.push(assistantToolCalls("", [call], engine.toolCallArguments === "object"));
     const signature = signatureOf(call.name, call.arguments);
     if (calledSignatures.has(signature)) {
-      conversation.push({ role: "tool", content: "You already ran that exact call. Use different arguments or answer now, citing the [n] sources you have." });
+      conversation.push({
+        role: "tool",
+        tool_call_id: call.id,
+        name: call.name,
+        content: "You already ran that exact call. Use different arguments or answer now, citing the [n] sources you have.",
+      });
       continue;
     }
     calledSignatures.add(signature);
-    conversation.push({ role: "tool", content: await runTool(call.name, call.arguments) });
+    conversation.push({
+      role: "tool",
+      tool_call_id: call.id,
+      name: call.name,
+      content: await runTool(call.name, call.arguments),
+    });
   }
 
   // Budget exhausted: force a final prose answer from what we gathered.
@@ -555,13 +724,17 @@ export async function runAgentTurn({ question, engine, tools, hooks = {}, maxSte
   return { answer, evidence: evidence.list };
 }
 
-function assistantToolCalls(content, calls) {
+function assistantToolCalls(content, calls, argumentsAsObject = false) {
   return {
     role: "assistant",
     content: content || "",
     tool_calls: calls.map((call) => ({
+      id: call.id,
       type: "function",
-      function: { name: call.name, arguments: JSON.stringify(call.arguments || {}) },
+      function: {
+        name: call.name,
+        arguments: argumentsAsObject ? (call.arguments || {}) : JSON.stringify(call.arguments || {}),
+      },
     })),
   };
 }

@@ -7,6 +7,7 @@
 //
 //   node web/e2e/run-model.mjs "webllm:Llama-3.2-1B-Instruct-q4f16_1-MLC"
 //   node web/e2e/run-model.mjs "transformers:onnx-community/Qwen3-0.6B-ONNX"
+//   node web/e2e/run-model.mjs "api:local-model"  # E2E_API_BASE_URL=http://127.0.0.1:8081/v1
 //
 // Model weights download from CDN on first use (can be minutes). A persistent
 // browser profile under the OS temp dir caches them across runs.
@@ -18,10 +19,15 @@ import { startServer } from "./static-server.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MODEL = process.argv[2] || "webllm:Llama-3.2-1B-Instruct-q4f16_1-MLC";
-const QUESTION = process.argv[3] || "What RTK GPS module do people recommend for OpenMower?";
+const DEFAULT_QUESTION = "What RTK GPS module do people recommend for OpenMower?";
+const QUESTION = process.argv[3] || DEFAULT_QUESTION;
+const expectedAnswerPattern = process.env.E2E_EXPECT
+  || (QUESTION === DEFAULT_QUESTION ? "F9P|UM982|simpleRTK2B|Ardusimple" : "");
 const PORT = 8099;
 const TIMEOUT_MS = Number(process.env.E2E_TIMEOUT_MS || 900000); // 15 min default
 const channel = process.env.E2E_CHANNEL || "msedge";
+const apiBaseUrl = process.env.E2E_API_BASE_URL || "http://127.0.0.1:8081/v1";
+const apiKey = process.env.E2E_API_KEY || "";
 // Profile dir holds WebLLM's per-origin weight cache. Overridable so a large
 // model can use its own clean profile (Cache Storage has a per-origin quota;
 // stacking several multi-GB models in one profile can exceed it and surface as
@@ -46,7 +52,13 @@ const context = await chromium.launchPersistentContext(profileDir, {
   // force-high-performance-gpu: on laptops the default WebGPU adapter is the
   // weak integrated GPU, which hangs (DXGI_ERROR_DEVICE_HUNG) running a model;
   // route to the discrete GPU instead.
-  args: ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPU", "--ignore-gpu-blocklist", "--force-high-performance-gpu"],
+  args: [
+    "--enable-unsafe-webgpu",
+    "--enable-features=Vulkan,WebGPU",
+    "--ignore-gpu-blocklist",
+    "--force-high-performance-gpu",
+    "--disable-gpu-watchdog",
+  ],
   viewport: { width: 1200, height: 800 },
 });
 
@@ -75,8 +87,15 @@ try {
   }
 
   await page.waitForFunction(() => /Ready|index/i.test(document.querySelector("#summary")?.textContent || ""), { timeout: 30000 });
-  await page.selectOption("#answer-mode", MODEL);
+  const apiModel = MODEL.startsWith("api:") ? MODEL.slice("api:".length) : "";
+  await page.selectOption("#answer-mode", apiModel ? "api" : MODEL);
+  if (apiModel) {
+    await page.fill("#api-base-url", apiBaseUrl);
+    await page.fill("#api-model", apiModel);
+    await page.fill("#api-key", apiKey);
+  }
   console.log(`Model: ${MODEL}`);
+  if (apiModel) console.log(`API: ${apiBaseUrl}`);
   console.log(`Question: ${QUESTION}`);
 
   await page.fill("#query", QUESTION);
@@ -132,11 +151,13 @@ try {
 
   const searched = run.toolCalls.some((c) => c.name === "search_messages");
   const grounded = run.answer && run.answer.length > 20 && !run.answer.includes(FALLBACK);
+  const expectedAnswer = !expectedAnswerPattern || new RegExp(expectedAnswerPattern, "i").test(run.answer || "");
 
   if (!searched) fail("model did not call search_messages");
   if (run.sources < 1) fail("no sources were retrieved");
   if (!grounded) fail("answer is empty or the non-grounded fallback");
-  if (searched && run.sources >= 1 && grounded) console.log("\n✅ PASS: native tool call → real sources → grounded answer");
+  if (!expectedAnswer) fail(`answer did not contain expected evidence (${expectedAnswerPattern})`);
+  if (searched && run.sources >= 1 && grounded && expectedAnswer) console.log("\n✅ PASS: native tool call → real sources → grounded answer");
 } catch (e) {
   if (/no webgpu|no done/.test(String(e))) {/* already reported */}
   else fail(`exception: ${String(e).split("\n")[0]}`);

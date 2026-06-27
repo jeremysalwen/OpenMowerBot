@@ -95,18 +95,21 @@ built-in browser LLM support, but it does require WebGPU. Firefox builds without
 WebGPU should use Auto or a Transformers.js model. The first model load
 downloads model artifacts and can take several minutes.
 
-Model reliability for native tool calling varies a lot by size:
+The built-in local model choices are intended to sit on the practical browser
+Pareto frontier for this harness rather than to be a random sample:
 
-- **Qwen3 0.6B** (Transformers.js) is the smallest model that reliably calls
-  tools and grounds its answer; it is the default and recommended WASM model.
-  Give reasoning models room — the loop allows a large token budget so the
-  model can think *and* still emit the tool call.
-- **WebLLM** models (Llama 3.2 1B/3B, Qwen2 0.5B) use grammar-constrained
-  decoding for structured tool calls and are generally reliable; the 3B model
-  is the strongest option when WebGPU is available.
-- **SmolLM2 135M** and **Gemma 3 270M** are too small to drive tool calls
-  consistently (they tend to narrate intent or loop) and are kept only as
-  low-resource fallbacks.
+- **WebLLM** uses current prebuilt WebGPU models at approximate 0.5B, 1B, 4B,
+  and 8B sizes: Qwen2.5 0.5B, Qwen3.5 0.8B, Qwen3.5 4B, and Hermes 3 Llama
+  3.1 8B. Hermes 8B is kept as the large option because WebLLM exposes native
+  OpenAI-style function calling for it; the Qwen models use the manual
+  `<tool_call>` protocol.
+- **Transformers.js** uses the strongest current ONNX community Qwen3 text
+  generation models that run through the browser pipeline: 0.6B, 1.7B, and 4B.
+  I did not keep the older 135M/270M models in the selector because they are
+  below the reliable tool-calling floor for this agent.
+- No practical 8B Transformers.js ONNX option is listed today; the available
+  browser-compatible Qwen3 ONNX line tops out at 4B in the model inventory used
+  by this app.
 
 The output handling tolerates `<tool_call>` tags, bare/fenced JSON, reasoning
 (`<think>`) blocks, and placeholder argument values, but it cannot make a model
