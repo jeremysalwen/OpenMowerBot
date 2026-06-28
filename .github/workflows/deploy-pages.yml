@@ -40,6 +40,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # Attachments are stored in Git LFS; fetch the real files so the
+          # static archive bundles actual images rather than LFS pointer stubs.
+          lfs: true
 
       - name: Set up Node
         uses: actions/setup-node@v4
