@@ -793,20 +793,18 @@ function renderAttachments(attachments = [], attachmentLinks) {
   return `
     <ul class="attachments">
       ${attachments.map((attachment) => {
-        // Prefer the bundled local copy; fall back to the Discord CDN URL only
-        // when the attachment was never archived locally.
+        // Only the bundled local copy is used. The original Discord CDN URLs
+        // are expired/broken, so un-archived attachments are not linked; they
+        // are listed with a note that the file was too big to download.
         const local = attachmentLinks?.get(attachment.localPath);
-        const href = local || safeHttpUrl(attachment.url || "");
         const label = attachment.fileName || "attachment";
         const meta = [attachment.contentType, formatBytes(attachment.fileSizeBytes)].filter(Boolean).join(", ");
-        // Embed images only when a local copy was bundled; original Discord CDN
-        // URLs are often expired, so un-archived images fall back to a link.
         const preview = local && isImageAttachment(attachment)
           ? `<a class="attachment-preview" href="${escapeAttr(local)}"><img src="${escapeAttr(local)}" loading="lazy" alt="${escapeAttr(label)}"></a>`
           : "";
-        const link = href
-          ? `<a href="${escapeAttr(href)}">${escapeHtml(label)}</a>`
-          : `<span>${escapeHtml(label)}</span>`;
+        const link = local
+          ? `<a href="${escapeAttr(local)}">${escapeHtml(label)}</a>`
+          : `<span>${escapeHtml(label)}</span><span class="muted">too big to download</span>`;
         return `
           <li>
             ${preview}
