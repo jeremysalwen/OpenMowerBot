@@ -53,7 +53,7 @@ Keep reasonably sized attachments locally. For the first public GitHub version:
 Default selected attachment download:
 
 ```bash
-npm run download-attachments -- --corpus data/corpus --max-size 1025000
+npm run download-attachments -- --corpus data/corpus --max-size 1049600
 ```
 
 Use `--extensions` and `--max-size` to widen or narrow the policy.

@@ -79,7 +79,7 @@ jobs:
         run: |
           node ./bin/discord-history.mjs download-attachments \
             --corpus data/corpus \
-            --max-size 1025000
+            --max-size 1049600
 
       - name: Show corpus stats
         run: node ./bin/discord-history.mjs stats --corpus data/corpus
