@@ -61,7 +61,7 @@ export async function runDiscordChatExporter(options = {}) {
   };
 }
 
-async function loadEnvFile(file) {
+export async function loadEnvFile(file) {
   let content;
   try {
     content = await fs.readFile(file, "utf8");

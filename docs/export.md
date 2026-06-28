@@ -53,10 +53,16 @@ Keep reasonably sized attachments locally. For the first public GitHub version:
 Default selected attachment download:
 
 ```bash
-npm run download-attachments -- --corpus data/corpus --max-size 500000
+npm run download-attachments -- --corpus data/corpus --max-size 1025000
 ```
 
 Use `--extensions` and `--max-size` to widen or narrow the policy.
+
+Discord CDN URLs stored in the corpus are signed with a short expiry and go
+stale (HTTP 404). The downloader refreshes them through the Discord
+`attachments/refresh-urls` API before fetching, using `DISCORD_TOKEN` from
+`.env` (or `--token`). Pass `--bot` if the token is a bot token, or
+`--no-refresh` to skip refreshing and use the stored URLs as-is.
 
 ## Privacy Review
 
