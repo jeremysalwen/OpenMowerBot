@@ -399,11 +399,15 @@ async function bundleArchiveAttachments(archiveDir, channels, attachmentsRoot) {
         // place in the bundle and keeps its original URL.
         if (!suffix || suffix.startsWith("..") || path.isAbsolute(suffix)) continue;
 
+        let stats;
         try {
-          await fs.stat(source);
+          stats = await fs.stat(source);
         } catch {
           continue; // Listed in the corpus but not downloaded locally.
         }
+        // Skip unresolved Git LFS pointer stubs (small text files) so we never
+        // bundle a broken image; these fall back to a plain link instead.
+        if (await isLfsPointer(source, stats.size)) continue;
 
         const segments = suffix.split(path.sep);
         const dest = path.join(attachmentsDir, ...segments);
@@ -417,6 +421,23 @@ async function bundleArchiveAttachments(archiveDir, channels, attachmentsRoot) {
   }
 
   return links;
+}
+
+// A Git LFS pointer is a tiny text file beginning with a version line. Detect
+// it so unresolved pointers (e.g. when LFS objects were not fetched) are not
+// mistaken for real attachment bytes.
+async function isLfsPointer(source, size) {
+  if (size > 1024) return false;
+  let handle;
+  try {
+    handle = await fs.open(source, "r");
+    const { buffer, bytesRead } = await handle.read(Buffer.alloc(64), 0, 64, 0);
+    return buffer.toString("utf8", 0, bytesRead).startsWith("version https://git-lfs");
+  } catch {
+    return false;
+  } finally {
+    await handle?.close();
+  }
 }
 
 async function writeChannelArchive(archiveDir, channel, options) {
@@ -778,8 +799,10 @@ function renderAttachments(attachments = [], attachmentLinks) {
         const href = local || safeHttpUrl(attachment.url || "");
         const label = attachment.fileName || "attachment";
         const meta = [attachment.contentType, formatBytes(attachment.fileSizeBytes)].filter(Boolean).join(", ");
-        const preview = href && isImageAttachment(attachment)
-          ? `<a class="attachment-preview" href="${escapeAttr(href)}"><img src="${escapeAttr(href)}" loading="lazy" alt="${escapeAttr(label)}"></a>`
+        // Embed images only when a local copy was bundled; original Discord CDN
+        // URLs are often expired, so un-archived images fall back to a link.
+        const preview = local && isImageAttachment(attachment)
+          ? `<a class="attachment-preview" href="${escapeAttr(local)}"><img src="${escapeAttr(local)}" loading="lazy" alt="${escapeAttr(label)}"></a>`
           : "";
         const link = href
           ? `<a href="${escapeAttr(href)}">${escapeHtml(label)}</a>`
