@@ -97,6 +97,7 @@ async function downloadAttachments(options) {
   console.log(`Considered attachments: ${stats.considered}`);
   console.log(`Selected attachments: ${stats.selected}`);
   console.log(`Selected bytes: ${stats.selectedBytes}`);
+  console.log(`Refreshed URLs: ${stats.refreshed}`);
   console.log(`Downloaded attachments: ${stats.downloaded}`);
   console.log(`Skipped existing: ${stats.skippedExisting}`);
   console.log(`Skipped by size: ${stats.skippedSize}`);
@@ -338,6 +339,10 @@ Attachment download:
   --extensions LIST     Comma-separated extensions, or "all".
   --dry-run             Count what would be downloaded.
   --force               Re-download existing files.
+  --token TOKEN         Discord token for refreshing expired CDN URLs
+                        (defaults to DISCORD_TOKEN in .env).
+  --bot                 Treat the token as a bot token (Authorization: Bot ...).
+  --no-refresh          Do not refresh expired URLs via the Discord API.
 
 Browser index:
   --out DIR             Output directory, default data/index/browser.
