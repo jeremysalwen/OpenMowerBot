@@ -60,7 +60,14 @@ const DEFAULT_EXTENSIONS = new Set([
   ".stl",
   ".kicad_pcb",
   ".kicad_sch",
+  ".bag",
+  ".mcap",
+  ".db3",
 ]);
+
+// Rosbag recordings are valuable but routinely exceed the generic size cap, so
+// they are downloaded regardless of --max-size (when their extension is allowed).
+const NO_SIZE_LIMIT_EXTENSIONS = new Set([".bag", ".mcap", ".db3"]);
 
 // Discord signs CDN URLs with a short-lived expiry, so URLs stored in the
 // corpus go stale (HTTP 404). The attachments/refresh-urls endpoint mints fresh
@@ -102,15 +109,15 @@ export async function downloadSelectedAttachments(options = {}) {
     for (const attachment of message.attachments || []) {
       stats.considered += 1;
 
-      const size = Number(attachment.fileSizeBytes || 0);
-      if (size > maxSize) {
-        stats.skippedSize += 1;
-        continue;
-      }
-
       const ext = path.extname(attachment.fileName || "").toLowerCase();
       if (extensions.size > 0 && !extensions.has(ext)) {
         stats.skippedType += 1;
+        continue;
+      }
+
+      const size = Number(attachment.fileSizeBytes || 0);
+      if (size > maxSize && !NO_SIZE_LIMIT_EXTENSIONS.has(ext)) {
+        stats.skippedSize += 1;
         continue;
       }
 
