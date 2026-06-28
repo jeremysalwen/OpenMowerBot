@@ -64,6 +64,8 @@ jobs:
           # archive/attachments/, so this copy publishes the archived images too.
           cp -R data/index/browser/archive _site/archive
           rm -rf _site/data/index/browser/archive
+          # Google Search Console verification for the archive directory.
+          cp googlec79aed56133bffbd.html _site/archive/
           # The browser assistant app's own attachments are not published; its
           # Sources panel links to the Discord CDN.
           printf 'window.DISCORD_HISTORY_CONFIG = { attachmentsLocal: false };\n' > _site/web/config.js
