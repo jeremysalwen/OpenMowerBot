@@ -2,8 +2,10 @@ name: Deploy browser app
 
 # Publishes the static browser search/answer app and static chat archive to GitHub Pages.
 # The browser index is rebuilt from the committed corpus on each deploy, so it
-# is never committed. Attachments are not published; attachment links fall back
-# to the original Discord CDN URLs.
+# is never committed. The static archive bundles its own copies of archived
+# attachments (under archive/attachments/), so archive image previews and links
+# are served locally instead of hotlinking the Discord CDN. The browser
+# assistant app still falls back to Discord URLs (config.js attachmentsLocal).
 
 on:
   push:
@@ -54,9 +56,12 @@ jobs:
           mkdir -p _site/web _site/data/index
           cp -R web/. _site/web/
           cp -R data/index/browser _site/data/index/browser
+          # The archive dir already bundles its own attachments under
+          # archive/attachments/, so this copy publishes the archived images too.
           cp -R data/index/browser/archive _site/archive
           rm -rf _site/data/index/browser/archive
-          # Attachments are not published to Pages; link to the Discord CDN.
+          # The browser assistant app's own attachments are not published; its
+          # Sources panel links to the Discord CDN.
           printf 'window.DISCORD_HISTORY_CONFIG = { attachmentsLocal: false };\n' > _site/web/config.js
           # Make the bare Pages URL link to both static entry points.
           cat > _site/index.html <<'HTML'

@@ -45,9 +45,14 @@ export async function buildBrowserIndex(corpusDir, outDir, options = {}) {
   }
 
   const termBuckets = await writeTermBuckets(searchDir, termPostings);
+  // Archived attachments live alongside the corpus (data/attachments by the
+  // data contract). Resolve their root so the archive can bundle local copies
+  // instead of hotlinking the original Discord CDN URLs.
+  const attachmentsRoot = path.resolve(path.dirname(path.resolve(corpusDir)), "attachments");
   const archive = await writeStaticArchive(archiveDir, archiveChannels, {
     generatedAt,
     pageSize: archivePageSize,
+    attachmentsRoot,
   });
   const manifest = {
     schemaVersion: 1,
@@ -242,6 +247,7 @@ async function writeStaticArchive(archiveDir, channelsMap, options) {
   const archiveOptions = {
     ...options,
     archiveLinks: buildArchiveMessageLinks(channels),
+    attachmentLinks: await bundleArchiveAttachments(archiveDir, channels, options.attachmentsRoot),
   };
 
   let pageCount = 1;
@@ -360,6 +366,53 @@ function buildArchiveMessageLinks(channels) {
         file: message.pageFile,
         anchor: messageAnchorId(message),
       });
+    }
+  }
+
+  return links;
+}
+
+// Copy every referenced, on-disk attachment into the archive so it is fully
+// self-contained and portable: image previews and download links point at the
+// bundled copy instead of hotlinking the original Discord CDN URL. Returns a
+// map from a message's compact localPath to the page-relative href of its
+// bundled copy. Channel pages all live at channels/<slug>/, so every reference
+// uses the same ../../attachments/ prefix as styles.css. Attachments without a
+// usable local copy are omitted and fall back to their Discord URL.
+async function bundleArchiveAttachments(archiveDir, channels, attachmentsRoot) {
+  const links = new Map();
+  if (!attachmentsRoot) return links;
+
+  const attachmentsDir = path.join(archiveDir, "attachments");
+  const seen = new Set();
+
+  for (const channel of channels) {
+    for (const message of channel.messages) {
+      for (const attachment of message.attachments || []) {
+        const localPath = attachment.localPath;
+        if (!localPath || seen.has(localPath)) continue;
+        seen.add(localPath);
+
+        const source = path.resolve(localPath);
+        const suffix = path.relative(attachmentsRoot, source);
+        // Skip anything resolving outside the attachments root; it has no safe
+        // place in the bundle and keeps its original URL.
+        if (!suffix || suffix.startsWith("..") || path.isAbsolute(suffix)) continue;
+
+        try {
+          await fs.stat(source);
+        } catch {
+          continue; // Listed in the corpus but not downloaded locally.
+        }
+
+        const segments = suffix.split(path.sep);
+        const dest = path.join(attachmentsDir, ...segments);
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await fs.copyFile(source, dest, fs.constants.COPYFILE_FICLONE);
+
+        const href = `../../attachments/${segments.map(encodeURIComponent).join("/")}`;
+        links.set(localPath, href);
+      }
     }
   }
 
@@ -685,7 +738,7 @@ function renderMessage(message, channel, options = {}) {
       </header>
       ${reply}
       ${content}
-      ${renderAttachments(message.attachments)}
+      ${renderAttachments(message.attachments, options.attachmentLinks)}
     </article>
   `;
 }
@@ -711,7 +764,7 @@ function replyHrefForMessage(message, channel, archiveLinks) {
   return null;
 }
 
-function renderAttachments(attachments = []) {
+function renderAttachments(attachments = [], attachmentLinks) {
   if (attachments.length === 0) {
     return "";
   }
@@ -719,7 +772,10 @@ function renderAttachments(attachments = []) {
   return `
     <ul class="attachments">
       ${attachments.map((attachment) => {
-        const href = safeHttpUrl(attachment.url || "");
+        // Prefer the bundled local copy; fall back to the Discord CDN URL only
+        // when the attachment was never archived locally.
+        const local = attachmentLinks?.get(attachment.localPath);
+        const href = local || safeHttpUrl(attachment.url || "");
         const label = attachment.fileName || "attachment";
         const meta = [attachment.contentType, formatBytes(attachment.fileSizeBytes)].filter(Boolean).join(", ");
         const preview = href && isImageAttachment(attachment)
