@@ -1,47 +1,14 @@
-# DiscordHistory
+# OpenMower Discord Archive
 
-A searchable archive of the **OpenMower** Discord server. The full message history is normalized into plain, committed files so you can ask questions about it, search it, or read it directly — no server and no database required.
+The full message history of the **OpenMower** Discord server, normalized into plain committed files. No server, no database: clone the repo and the whole archive is on disk as JSON you can search, read, or grep.
 
-There are three ways to use the archive, from most to least capable.
+**Ask it questions in your browser: https://jeremysalwen.github.io/OpenMowerBot/**
 
-## Using the archive
+## The archive
 
-### 1. Ask an agent CLI (recommended)
+The corpus is `data/corpus/messages.jsonl` — one JSON object per message, with `timestamp`, `channelName`, `authorName`, `content`, `messageUrl`, attachments, and reply links. Selected attachments are under `data/attachments/`. That file is the archive; everything else is tooling on top of it.
 
-The best way to get real answers. Clone the repo and run an agent CLI — [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex) — inside the directory, then ask questions in plain language:
-
-```bash
-git clone https://github.com/jeremysalwen/OpenMowerBot.git
-cd OpenMowerBot
-claude          # or: codex
-```
-
-Then just ask, e.g. *"How do people fix RTK GPS drift?"* or *"What changed in the firmware around January 2024?"*. `AGENTS.md` teaches the agent to use the bundled search CLI, so it runs focused searches, expands the surrounding conversation, and cites messages — with no setup beyond cloning and Node 18+.
-
-### 2. Web interface
-
-A static page, no install. Open the hosted app:
-
-**https://jeremysalwen.github.io/OpenMowerBot/**
-
-Type a question; it runs the same searches in your browser and answers with cited sources listed in a side panel. Pick an answer model in the top-right:
-
-- **Hosted API (OpenAI-compatible)** — bring your own base URL, model, and key (OpenAI, OpenRouter, Groq, Anthropic's compatibility endpoint, a local server, …). The most reliable option; the key stays in your browser.
-- **Built-in / WebLLM / Transformers.js** — local models that run entirely in the browser (no key, but smaller and less reliable). The explicit WebLLM and Transformers.js choices are curated by approximate size from the practical browser model frontier for this tool-calling harness.
-- **Evidence only** — skips the LLM and just lists the top matching messages.
-
-To run it locally instead, serve the repo root and open `/web/`:
-
-```bash
-npm run build-browser-index      # first time: builds data/index/browser
-python3 -m http.server 8080      # then open http://localhost:8080/web/
-```
-
-### 3. Read the data directly
-
-Everything is plain files you can read yourself. The corpus is `data/corpus/messages.jsonl` — one JSON object per Discord message (`timestamp`, `channelName`, `authorName`, `content`, `messageUrl`, attachments, and reply links). Selected attachments are under `data/attachments/`.
-
-Search it with the dependency-free CLI (Node 18+, nothing to install):
+Search it with the bundled CLI (Node 18+, no dependencies):
 
 ```bash
 node ./bin/discord-history.mjs search --q "rtk gps" --channel mower --after 2023-01-01 --limit 10
@@ -49,11 +16,38 @@ node ./bin/discord-history.mjs context --message-id 123456789012345678 --json
 node ./bin/discord-history.mjs stats --corpus data/corpus
 ```
 
-`search` supports `--q`, `--author`, `--channel`, `--after`, `--before`, `--has-attachment`, `--attachment`, `--limit`, and `--json`. `context` shows the same-channel conversation around a message or a channel time range. Or just `grep` / open `data/corpus/messages.jsonl` yourself.
+`search` supports `--q`, `--author`, `--channel`, `--after`, `--before`, `--has-attachment`, `--attachment`, `--limit`, and `--json`. `context` shows the same-channel conversation around a message or a time range. Or just `grep data/corpus/messages.jsonl`.
+
+## Asking questions
+
+### Web (no install)
+
+Open **https://jeremysalwen.github.io/OpenMowerBot/**, type a question, and it searches the archive in your browser and answers with cited sources. Pick an answer model in the top-right:
+
+- **Hosted API (OpenAI-compatible)** — your own base URL, model, and key (OpenAI, OpenRouter, Groq, Anthropic's compatibility endpoint, a local server). Most reliable; the key stays in your browser.
+- **WebLLM / Transformers.js** — local models that run entirely in the browser. No key, but smaller and less reliable.
+- **Evidence only** — skip the LLM and list the top matching messages.
+
+Run it locally by serving the repo root:
+
+```bash
+npm run build-browser-index      # first time: builds data/index/browser
+python3 -m http.server 8080      # then open http://localhost:8080/web/
+```
+
+### Agent CLI
+
+Run an agent CLI such as [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex) in the cloned repo and ask in plain language ("How do people fix RTK GPS drift?"). `AGENTS.md` teaches it to use the search CLI, so it runs focused searches, expands surrounding conversation, and cites messages.
+
+```bash
+git clone https://github.com/jeremysalwen/OpenMowerBot.git
+cd OpenMowerBot
+claude          # or: codex
+```
 
 ---
 
-The rest of this README covers how the archive is built and maintained; it is secondary to the usage above.
+The rest of this README covers how the archive is built and maintained.
 
 ## Repository layout
 
@@ -141,17 +135,15 @@ Recommended repository policy:
 
 ## Browser app architecture
 
-The browser app loads `data/index/browser/manifest.json`, fetches only the needed message/index shards, and presents a chat interface. It is a plain tool-calling agent: the selected model (local or hosted API) decides, step by step, which browser tool to call (`search_messages`, `get_context`, `read_channel`) and answers once it has enough evidence. Cited sources are shown in a side panel, not baked into the answer text.
+The browser app loads `data/index/browser/manifest.json`, fetches only the message/index shards it needs, and presents a chat interface. It is a tool-calling agent: the selected model decides which tool to call (`search_messages`, `get_context`, `read_channel`) and answers once it has enough evidence. Cited sources show in a side panel rather than inline.
 
-Answer engines are isolated behind one `chat(messages)` interface:
+Answer engines sit behind one `chat(messages)` interface, so swapping the model never changes how the corpus is queried:
 
-- A hosted OpenAI-compatible chat-completions API with a user-supplied base URL, model, and key, sent directly from the browser. The most reliable tool-caller available in-browser.
-- Chrome built-in Prompt API when available.
-- WebLLM through `@mlc-ai/web-llm` for browsers with WebGPU but no built-in LLM API.
-- Transformers.js through `@huggingface/transformers` for browsers without WebGPU, including Firefox where `navigator.gpu` is unavailable.
-- A disabled/no-LLM mode that still returns ranked evidence.
-
-The tool *implementations* do not depend on the LLM adapter: the same `search_messages`, `get_context`, and `read_channel` tools back every engine, so swapping the answer model never changes how the corpus is queried. The LLM only chooses which tools to call and when to stop. This keeps local agents, static hosting, and future browser APIs compatible with the same corpus.
+- Hosted OpenAI-compatible API (user-supplied base URL, model, key).
+- Chrome built-in Prompt API.
+- WebLLM via `@mlc-ai/web-llm` for WebGPU browsers without a built-in LLM API.
+- Transformers.js via `@huggingface/transformers` for browsers without WebGPU, including Firefox.
+- A no-LLM mode that returns ranked evidence only.
 
 ## Sources
 
