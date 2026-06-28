@@ -334,7 +334,7 @@ Export options:
   --media-dir DIR       Media destination when --media is enabled.
 
 Attachment download:
-  --max-size BYTES      Max attachment size, default 500000.
+  --max-size BYTES      Max attachment size, default 1025000.
   --extensions LIST     Comma-separated extensions, or "all".
   --dry-run             Count what would be downloaded.
   --force               Re-download existing files.

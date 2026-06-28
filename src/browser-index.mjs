@@ -759,7 +759,7 @@ function renderMessage(message, channel, options = {}) {
       </header>
       ${reply}
       ${content}
-      ${renderAttachments(message.attachments, options.attachmentLinks)}
+      ${renderAttachments(message.attachments, options.attachmentLinks, message.messageUrl)}
     </article>
   `;
 }
@@ -785,26 +785,31 @@ function replyHrefForMessage(message, channel, archiveLinks) {
   return null;
 }
 
-function renderAttachments(attachments = [], attachmentLinks) {
+function renderAttachments(attachments = [], attachmentLinks, messageUrl) {
   if (attachments.length === 0) {
     return "";
   }
+
+  const messageHref = safeHttpUrl(messageUrl || "");
 
   return `
     <ul class="attachments">
       ${attachments.map((attachment) => {
         // Only the bundled local copy is used. The original Discord CDN URLs
         // are expired/broken, so un-archived attachments are not linked; they
-        // are listed with a note that the file was too big to download.
+        // are listed with a note pointing back to the original Discord message.
         const local = attachmentLinks?.get(attachment.localPath);
         const label = attachment.fileName || "attachment";
         const meta = [attachment.contentType, formatBytes(attachment.fileSizeBytes)].filter(Boolean).join(", ");
         const preview = local && isImageAttachment(attachment)
           ? `<a class="attachment-preview" href="${escapeAttr(local)}"><img src="${escapeAttr(local)}" loading="lazy" alt="${escapeAttr(label)}"></a>`
           : "";
+        const unavailableNote = messageHref
+          ? `too big to download (you likely can download it from the <a href="${escapeAttr(messageHref)}">original discord message</a>)`
+          : "too big to download";
         const link = local
           ? `<a href="${escapeAttr(local)}">${escapeHtml(label)}</a>`
-          : `<span>${escapeHtml(label)}</span><span class="muted">too big to download</span>`;
+          : `<span>${escapeHtml(label)}</span><span class="muted">${unavailableNote}</span>`;
         return `
           <li>
             ${preview}
