@@ -72,10 +72,14 @@ jobs:
             --out data/corpus
 
       - name: Download selected attachments
+        # Refreshes expired Discord CDN URLs via the API (DISCORD_TOKEN above)
+        # before fetching. Only missing files are downloaded; rosbags bypass the
+        # size cap. Existing attachments are present as LFS pointer stubs (LFS
+        # objects are intentionally not fetched here) and are skipped as-is.
         run: |
           node ./bin/discord-history.mjs download-attachments \
             --corpus data/corpus \
-            --max-size 500000
+            --max-size 1025000
 
       - name: Show corpus stats
         run: node ./bin/discord-history.mjs stats --corpus data/corpus
