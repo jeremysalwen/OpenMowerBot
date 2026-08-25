@@ -8,6 +8,7 @@
     "discord-history": "./bin/discord-history.mjs"
   },
   "scripts": {
+    "test": "node --test src/*.test.mjs web/agent.test.mjs web/openai-chat.test.mjs",
     "export": "node ./bin/discord-history.mjs export",
     "ingest": "node ./bin/discord-history.mjs ingest",
     "build-corpus": "node ./bin/discord-history.mjs build-corpus",

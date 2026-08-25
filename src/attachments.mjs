@@ -81,6 +81,9 @@ export async function downloadSelectedAttachments(options = {}) {
 
   const corpusDir = path.resolve(options.corpus || "data/corpus");
   const maxSize = Number(options.maxSize || options.maxSizeBytes || 1025 * 1024);
+  // Downloads normally land in the local data/attachments cache; the nightly
+  // job points --out at a checkout of the attachments mirror instead.
+  const outRoot = options.out ? path.resolve(options.out) : null;
   const extensions = parseExtensions(options.extensions);
   const force = Boolean(options.force);
   const dryRun = Boolean(options.dryRun);
@@ -286,6 +289,8 @@ function sleep(ms) {
 // expected sha256 (the old LFS oid), the download is verified against it, so a
 // recovered file is provably the original bytes.
 export async function recoverMissingAttachments(options = {}) {
+  await loadEnvFile(options.env || ".env");
+
   const corpusDir = path.resolve(options.corpus || "data/corpus");
   const outRoot = path.resolve(options.out || "data/attachments");
   const dryRun = Boolean(options.dryRun);
@@ -308,6 +313,10 @@ export async function recoverMissingAttachments(options = {}) {
     }
   }
 
+  // A dry run only reports what would be fetched; refreshing URLs would be a
+  // pointless round trip to Discord for every batch.
+  if (dryRun) return stats;
+
   for (let index = 0; index < pending.length; index += REFRESH_BATCH_SIZE) {
     const batch = pending.slice(index, index + REFRESH_BATCH_SIZE);
     let refreshed = new Map();
@@ -319,8 +328,6 @@ export async function recoverMissingAttachments(options = {}) {
 
     for (const entry of batch) {
       const url = refreshed.get(entry.url) || entry.url;
-      if (dryRun) continue;
-
       const target = path.join(outRoot, ...entry.relative.split("/"));
       try {
         await fs.mkdir(path.dirname(target), { recursive: true });
