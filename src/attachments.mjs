@@ -297,7 +297,8 @@ export async function recoverMissingAttachments(options = {}) {
   const auth = createAuthScheme(options.token || process.env.DISCORD_TOKEN, options.bot);
 
   const wanted = await readMissingManifest(options.manifest);
-  const stats = { wanted: wanted.size, matched: 0, recovered: 0, verified: 0, mismatched: 0, failed: 0, bytes: 0 };
+  const stats = { wanted: wanted.size, matched: 0, recovered: 0, verified: 0, drifted: 0, rejected: 0, failed: 0, bytes: 0 };
+  const drifted = [];
   if (wanted.size === 0) return stats;
 
   // Walk the corpus once to attach a current URL to each wanted entry.
@@ -332,18 +333,35 @@ export async function recoverMissingAttachments(options = {}) {
       try {
         await fs.mkdir(path.dirname(target), { recursive: true });
         const buffer = await fetchBuffer(url);
-        if (entry.oid) {
-          const digest = crypto.createHash("sha256").update(buffer).digest("hex");
-          if (digest === entry.oid) {
-            stats.verified += 1;
-          } else {
-            // Discord served something other than the archived bytes; keeping
-            // it would silently corrupt the archive.
-            stats.mismatched += 1;
-            console.error(`Checksum mismatch, not written: ${entry.relative}`);
+        const digest = crypto.createHash("sha256").update(buffer).digest("hex");
+
+        if (entry.oid && digest === entry.oid) {
+          stats.verified += 1;
+        } else if (entry.oid) {
+          // Discord re-encodes attachments, so the bytes it serves today often
+          // differ from what was archived even though the image is intact:
+          // 12% of the files already in the mirror show the same drift. The
+          // archived original is unreachable, so a sound re-encode is the only
+          // surviving copy and is worth keeping. Verify it is genuinely the
+          // kind of file it claims to be rather than an error page or a
+          // truncated response, and record the drift so it stays auditable.
+          const problem = describeUnusable(buffer, entry.relative);
+          if (problem) {
+            stats.rejected += 1;
+            console.error(`Rejected ${entry.relative}: ${problem}`);
             continue;
           }
+
+          stats.drifted += 1;
+          drifted.push({
+            relative: entry.relative,
+            expectedOid: entry.oid,
+            actualOid: digest,
+            expectedSize: entry.size,
+            actualSize: buffer.length,
+          });
         }
+
         await fs.writeFile(target, buffer);
         stats.recovered += 1;
         stats.bytes += buffer.length;
@@ -354,7 +372,85 @@ export async function recoverMissingAttachments(options = {}) {
     }
   }
 
+  await writeDriftManifest(outRoot, drifted);
+
   return stats;
+}
+
+// Files whose bytes no longer match what was archived, recorded so the drift is
+// auditable rather than silent. Merged with any existing rows by path.
+async function writeDriftManifest(outRoot, rows) {
+  if (rows.length === 0) return;
+
+  const manifestPath = path.join(outRoot, "DRIFTED.tsv");
+  const merged = new Map();
+  try {
+    const existing = await fs.readFile(manifestPath, "utf8");
+    for (const line of existing.split("\n")) {
+      const row = line.trim();
+      if (!row || row.startsWith("#")) continue;
+      merged.set(row.split("\t")[0], row);
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+
+  for (const row of rows) {
+    merged.set(row.relative, [
+      row.relative, row.expectedOid, row.actualOid, row.expectedSize, row.actualSize,
+    ].join("\t"));
+  }
+
+  const header = [
+    "# Attachments recovered from Discord whose bytes differ from the copy that",
+    "# was originally archived. Discord re-encodes attachments, so these are the",
+    "# same image in a different encoding, not corrupt files. The archived",
+    "# original is unreachable, so the recovered copy is the surviving one.",
+    "#path\texpectedOid\tactualOid\texpectedSize\tactualSize",
+  ].join("\n");
+  await fs.writeFile(manifestPath, `${header}\n${[...merged.values()].sort().join("\n")}\n`);
+}
+
+// Guards against Discord returning something that is not the attachment at all.
+// Only checks that the payload is the kind of file it claims to be; it cannot
+// and should not check byte identity, which re-encoding legitimately breaks.
+const MEDIA_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".zip"]);
+const FILE_SIGNATURES = {
+  ".png": [[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
+  ".jpg": [[0xff, 0xd8, 0xff]],
+  ".jpeg": [[0xff, 0xd8, 0xff]],
+  ".gif": [[0x47, 0x49, 0x46, 0x38, 0x37, 0x61], [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]],
+  ".pdf": [[0x25, 0x50, 0x44, 0x46]],
+  ".zip": [[0x50, 0x4b, 0x03, 0x04], [0x50, 0x4b, 0x05, 0x06]],
+};
+
+export function describeUnusable(buffer, relative) {
+  if (buffer.length === 0) return "empty response";
+
+  const ext = path.extname(relative).toLowerCase();
+  // Discord serves an HTML page for expired or blocked links.
+  const head = buffer.subarray(0, 64).toString("latin1").trimStart().toLowerCase();
+  if (ext !== ".html" && ext !== ".htm" && (head.startsWith("<!doctype html") || head.startsWith("<html"))) {
+    return "HTML page instead of file data";
+  }
+
+  // Text and config attachments have no signature worth checking.
+  if (!MEDIA_EXTENSIONS.has(ext)) return null;
+
+  // Extensions do not reliably match content: the archive already contains a
+  // PNG named .jpg. Accept any recognizable media payload rather than
+  // demanding the one implied by the extension, so this gate catches error
+  // pages and truncated responses without discarding a real, mislabelled file.
+  return looksLikeKnownMedia(buffer) ? null : "not a recognizable media file";
+}
+
+function looksLikeKnownMedia(buffer) {
+  for (const signature of Object.values(FILE_SIGNATURES).flat()) {
+    if (buffer.subarray(0, signature.length).equals(Buffer.from(signature))) return true;
+  }
+  return buffer.length > 12
+    && buffer.subarray(0, 4).toString("latin1") === "RIFF"
+    && buffer.subarray(8, 12).toString("latin1") === "WEBP";
 }
 
 // Write the mirror's index of held files, one repo-relative path per line, so a

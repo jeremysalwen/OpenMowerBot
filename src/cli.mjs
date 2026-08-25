@@ -122,8 +122,9 @@ async function recoverAttachments(options) {
   console.log(`Listed as missing: ${stats.wanted}`);
   console.log(`Matched in corpus: ${stats.matched}`);
   console.log(`Recovered: ${stats.recovered}`);
-  console.log(`Checksum verified: ${stats.verified}`);
-  console.log(`Checksum mismatched: ${stats.mismatched}`);
+  console.log(`  checksum identical: ${stats.verified}`);
+  console.log(`  re-encoded by Discord: ${stats.drifted}`);
+  console.log(`Rejected (not a usable file): ${stats.rejected}`);
   console.log(`Failed: ${stats.failed}`);
   console.log(`Recovered bytes: ${stats.bytes}`);
 }

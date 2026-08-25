@@ -75,7 +75,7 @@ node ./bin/discord-history.mjs download-attachments --corpus data/corpus
 git clone https://github.com/jeremysalwen/OpenMowerBot-attachments.git
 ```
 
-A mirror path is its corpus `localPath` with the `data/attachments/` prefix removed. `MISSING.tsv` in the mirror lists attachments not yet recovered.
+A mirror path is its corpus `localPath` with the `data/attachments/` prefix removed. `MISSING.tsv` in the mirror lists attachments not yet recovered. `DRIFTED.tsv` lists recovered files whose bytes differ from the originally archived copy, because Discord re-encodes attachments.
 
 ## Answering Questions
 

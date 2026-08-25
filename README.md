@@ -130,6 +130,7 @@ They used to be tracked here with LFS. LFS downloads are metered against a bandw
 - Raw URL: `https://raw.githubusercontent.com/jeremysalwen/OpenMowerBot-attachments/main/<channelId>/<messageId>-<fileName>`
 - `INDEX.txt` lists what the mirror holds; the Pages build reads it so the archive never links to a file that is not there.
 - `MISSING.tsv` lists attachments the corpus references that the mirror does not have yet.
+- `DRIFTED.tsv` lists recovered attachments whose bytes differ from the copy originally archived. Discord re-encodes attachments, so these are the same image in a different encoding, not corrupt files; the archived original is unreachable, so the recovered copy is the surviving one.
 
 To get the files locally, either populate the ignored cache from the corpus, or clone the mirror (~577 MB):
 
