@@ -5,7 +5,7 @@ This directory contains an exported, indexed Discord history corpus. Use the CLI
 ## Data Contract
 
 - The committed chat corpus lives in `data/corpus/`.
-- The main corpus file is `data/corpus/messages.jsonl`, one readable JSON object per Discord message.
+- The corpus is split by year into `data/corpus/messages-YYYY.jsonl`, one readable JSON object per Discord message. Read them together (`grep data/corpus/messages-*.jsonl`); the CLI does this for you.
 - Corpus metadata lives in `data/corpus/manifest.json`.
 - Attachment files live in the separate `OpenMowerBot-attachments` repository, not here. `data/attachments/` is an ignored local cache.
 - Raw DiscordChatExporter JSON lives in `data/raw/` and is local scratch data.
@@ -63,7 +63,7 @@ Use `context` after search finds likely messages. It shows same-channel conversa
 
 Embedding search expects `data/index/embeddings.jsonl` to exist. Build it with `npm run build-embeddings` after installing `@huggingface/transformers`, then generate the query embedding with the same model recorded in the embedding manifest and pass it with `--vector '[0.1, 0.2]'` or `--vector-file`.
 
-Attachments are metadata-first. Every attachment is listed in `messages.jsonl` with its `localPath`, but the bytes are not committed to this repository. Source code, configs, logs, small archives, CAD/project files, PDFs, and smaller images are preferred. Large videos, archives, and raw binaries are usually skipped unless explicitly needed.
+Attachments are metadata-first. Every attachment is listed in the corpus with its `localPath`, but the bytes are not committed to this repository. Source code, configs, logs, small archives, CAD/project files, PDFs, and smaller images are preferred. Large videos, archives, and raw binaries are usually skipped unless explicitly needed.
 
 Attachment files live in `OpenMowerBot-attachments`, stored as ordinary Git objects. This repository must never enable Git LFS: an exhausted LFS bandwidth budget previously made `git clone` fail during checkout for everyone. To work with attachment files locally:
 

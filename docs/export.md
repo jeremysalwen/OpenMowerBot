@@ -44,7 +44,7 @@ The GitHub Actions workflow uses the lower incremental parallelism because Disco
 
 Keep reasonably sized attachments locally. For the first public GitHub version:
 
-- Include metadata for every attachment in `data/corpus/messages.jsonl`.
+- Include metadata for every attachment in `data/corpus/messages-YYYY.jsonl`.
 - Download selected files into `data/attachments/`.
 - Include source code uploads, configs, logs, small archives, CAD/project files, PDFs, and smaller images when useful.
 - Exclude huge videos, large archives, and raw binaries unless there is a clear reason to preserve them.

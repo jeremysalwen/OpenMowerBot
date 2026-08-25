@@ -13370,7 +13370,13 @@
     }
   },
   "files": {
-    "messages": "messages.jsonl",
+    "messages": [
+      "messages-2022.jsonl",
+      "messages-2023.jsonl",
+      "messages-2024.jsonl",
+      "messages-2025.jsonl",
+      "messages-2026.jsonl"
+    ],
     "embeddings": "../index/embeddings.jsonl"
   },
   "sourceFileCount": 0

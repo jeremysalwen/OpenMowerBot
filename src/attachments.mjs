@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readJsonl } from "./jsonl.mjs";
+import { readCorpusMessages } from "./corpus-shards.mjs";
 import { loadEnvFile } from "./exporter.mjs";
 
 const DEFAULT_EXTENSIONS = new Set([
@@ -80,7 +80,6 @@ export async function downloadSelectedAttachments(options = {}) {
   await loadEnvFile(options.env || ".env");
 
   const corpusDir = path.resolve(options.corpus || "data/corpus");
-  const messagesPath = path.join(corpusDir, "messages.jsonl");
   const maxSize = Number(options.maxSize || options.maxSizeBytes || 1025 * 1024);
   const extensions = parseExtensions(options.extensions);
   const force = Boolean(options.force);
@@ -106,7 +105,7 @@ export async function downloadSelectedAttachments(options = {}) {
   // Phase 1: decide what to fetch before touching the network so URLs can be
   // refreshed in batches right before download (refreshed URLs also expire).
   const pending = [];
-  for await (const message of readJsonl(messagesPath)) {
+  for await (const message of readCorpusMessages(corpusDir)) {
     for (const attachment of message.attachments || []) {
       stats.considered += 1;
 
@@ -288,7 +287,6 @@ function sleep(ms) {
 // recovered file is provably the original bytes.
 export async function recoverMissingAttachments(options = {}) {
   const corpusDir = path.resolve(options.corpus || "data/corpus");
-  const messagesPath = path.join(corpusDir, "messages.jsonl");
   const outRoot = path.resolve(options.out || "data/attachments");
   const dryRun = Boolean(options.dryRun);
   const auth = createAuthScheme(options.token || process.env.DISCORD_TOKEN, options.bot);
@@ -299,7 +297,7 @@ export async function recoverMissingAttachments(options = {}) {
 
   // Walk the corpus once to attach a current URL to each wanted entry.
   const pending = [];
-  for await (const message of readJsonl(messagesPath)) {
+  for await (const message of readCorpusMessages(corpusDir)) {
     for (const attachment of message.attachments || []) {
       const relative = toMirrorPath(attachment.localPath);
       const entry = relative && wanted.get(relative);

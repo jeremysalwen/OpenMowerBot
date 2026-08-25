@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import path from "node:path";
-import { readJsonl } from "./jsonl.mjs";
+import { CorpusShardWriter, readCorpusMessages } from "./corpus-shards.mjs";
 import { findJsonFiles } from "./normalize.mjs";
 
 const MAX_ATTACHMENT_FILE_NAME_LENGTH = 100;
@@ -13,14 +13,12 @@ export async function buildCorpusFromDiscordChatExporter(rawDir, outDir, options
   if (files.length === 0) {
     if (options.allowEmpty) {
       const manifest = createCorpusManifest();
-      const messagesPath = path.join(outDir, "messages.jsonl");
       const manifestPath = path.join(outDir, "manifest.json");
-      await fs.writeFile(messagesPath, "");
       await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
       return {
         manifest,
         sourceFileCount: 0,
-        messagesPath,
+        messagesPath: outDir,
         manifestPath,
       };
     }
@@ -28,10 +26,10 @@ export async function buildCorpusFromDiscordChatExporter(rawDir, outDir, options
     throw new Error(`No DiscordChatExporter JSON files found under ${rawDir}`);
   }
 
-  const messagesPath = path.join(outDir, "messages.jsonl");
   const manifestPath = path.join(outDir, "manifest.json");
   const manifest = createCorpusManifest();
-  const output = await fs.open(messagesPath, "w");
+  const output = new CorpusShardWriter(outDir);
+  let shardFiles = [];
 
   try {
     for (const file of files) {
@@ -43,20 +41,21 @@ export async function buildCorpusFromDiscordChatExporter(rawDir, outDir, options
       for (const message of exported.messages || []) {
         const compact = compactMessage(exported, message, sourceFile);
         updateCorpusManifest(manifest, compact);
-        await output.write(`${JSON.stringify(compact)}\n`);
+        await output.write(compact);
       }
     }
   } finally {
-    await output.close();
+    shardFiles = await output.close();
   }
 
+  manifest.files.messages = shardFiles;
   manifest.sourceFileCount = files.length;
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   return {
     manifest,
     sourceFileCount: files.length,
-    messagesPath,
+    messagesPath: shardFiles.map((name) => path.join(outDir, name)).join(", "),
     manifestPath,
   };
 }
@@ -64,32 +63,33 @@ export async function buildCorpusFromDiscordChatExporter(rawDir, outDir, options
 export async function mergeCorpusDirs(baseDir, deltaDir, outDir) {
   const messages = new Map();
 
-  await loadCorpusMessages(path.join(baseDir, "messages.jsonl"), messages);
-  await loadCorpusMessages(path.join(deltaDir, "messages.jsonl"), messages);
+  await loadCorpusMessages(baseDir, messages);
+  await loadCorpusMessages(deltaDir, messages);
 
   const sorted = [...messages.values()].sort(compareMessagesAsc);
   const manifest = createCorpusManifest();
 
   await fs.mkdir(outDir, { recursive: true });
-  const messagesPath = path.join(outDir, "messages.jsonl");
   const manifestPath = path.join(outDir, "manifest.json");
-  const output = await fs.open(messagesPath, "w");
+  const output = new CorpusShardWriter(outDir);
+  let shardFiles = [];
 
   try {
     for (const message of sorted) {
       updateCorpusManifest(manifest, message);
-      await output.write(`${JSON.stringify(message)}\n`);
+      await output.write(message);
     }
   } finally {
-    await output.close();
+    shardFiles = await output.close();
   }
 
+  manifest.files.messages = shardFiles;
   manifest.sourceFileCount = 0;
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   return {
     manifest,
-    messagesPath,
+    messagesPath: shardFiles.map((name) => path.join(outDir, name)).join(", "),
     manifestPath,
   };
 }
@@ -110,7 +110,7 @@ export function createCorpusManifest() {
     channels: {},
     authors: {},
     files: {
-      messages: "messages.jsonl",
+      messages: [],
       embeddings: "../index/embeddings.jsonl",
     },
   };
@@ -218,9 +218,9 @@ function updateGuild(manifest, guild = {}) {
   manifest.guilds[key].count += 1;
 }
 
-async function loadCorpusMessages(messagesPath, messages) {
+async function loadCorpusMessages(corpusDir, messages) {
   try {
-    for await (const message of readJsonl(messagesPath)) {
+    for await (const message of readCorpusMessages(corpusDir)) {
       if (message.id) {
         messages.set(message.id, message);
       }

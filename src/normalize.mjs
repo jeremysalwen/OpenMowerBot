@@ -115,7 +115,7 @@ export function createManifest() {
     channels: {},
     authors: {},
     files: {
-      messages: "messages.jsonl",
+      messages: [],
       embeddings: "embeddings.jsonl",
     },
   };

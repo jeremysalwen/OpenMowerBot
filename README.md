@@ -6,7 +6,7 @@ The full message history of the **OpenMower** Discord server, normalized into pl
 
 ## The archive
 
-The corpus is `data/corpus/messages.jsonl` — one JSON object per message, with `timestamp`, `channelName`, `authorName`, `content`, `messageUrl`, attachments, and reply links. That file is the archive; everything else is tooling on top of it. Cloning gets you the text corpus only, so it stays small; attachment files live in a [separate repository](https://github.com/jeremysalwen/OpenMowerBot-attachments) and are fetched on demand.
+The corpus is `data/corpus/messages-YYYY.jsonl` — one file per year, one JSON object per message, with `timestamp`, `channelName`, `authorName`, `content`, `messageUrl`, attachments, and reply links. Those files are the archive; everything else is tooling on top of it. Cloning gets you the text corpus only, so it stays small; attachment files live in a [separate repository](https://github.com/jeremysalwen/OpenMowerBot-attachments) and are fetched on demand.
 
 Search it with the bundled CLI (Node 18+, no dependencies):
 
@@ -16,7 +16,7 @@ node ./bin/discord-history.mjs context --message-id 123456789012345678 --json
 node ./bin/discord-history.mjs stats --corpus data/corpus
 ```
 
-`search` supports `--q`, `--author`, `--channel`, `--after`, `--before`, `--has-attachment`, `--attachment`, `--limit`, and `--json`. `context` shows the same-channel conversation around a message or a time range. Or just `grep data/corpus/messages.jsonl`.
+`search` supports `--q`, `--author`, `--channel`, `--after`, `--before`, `--has-attachment`, `--attachment`, `--limit`, and `--json`. `context` shows the same-channel conversation around a message or a time range. Or just `grep data/corpus/messages-*.jsonl`.
 
 ## Asking questions
 
@@ -85,7 +85,7 @@ Run the local exporter help before the first real export, because option names c
 
 The core CLI requires Node 18+ and has no npm dependencies.
 
-- `build-corpus`: reads DiscordChatExporter JSON from `data/raw` and writes `data/corpus/messages.jsonl` plus `data/corpus/manifest.json`.
+- `build-corpus`: reads DiscordChatExporter JSON from `data/raw` and writes `data/corpus/messages-YYYY.jsonl` plus `data/corpus/manifest.json`.
 - `merge-corpus`: merges an incremental corpus into the checked-in corpus by message ID.
 - `download-attachments`: downloads selected small/useful attachments into the ignored `data/attachments/` cache, or into a mirror checkout with `--out`.
 - `recover-attachments`: re-fetches attachments listed in a mirror's `MISSING.tsv` from Discord, verifying each against its recorded checksum.

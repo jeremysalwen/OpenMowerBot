@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readJsonl } from "./jsonl.mjs";
+import { readCorpusMessages } from "./corpus-shards.mjs";
 
 const DEFAULT_SHARD_SIZE = 1000;
 const DEFAULT_MAX_POSTINGS = 50000;
 const DEFAULT_ARCHIVE_PAGE_SIZE = 200;
 
 export async function buildBrowserIndex(corpusDir, outDir, options = {}) {
-  const messagesPath = path.join(corpusDir, "messages.jsonl");
+
   const shardSize = positiveInteger(options.shardSize, DEFAULT_SHARD_SIZE);
   const maxPostings = positiveInteger(options.maxPostings, DEFAULT_MAX_POSTINGS);
   const minTermLength = positiveInteger(options.minTermLength, 2);
@@ -27,7 +27,7 @@ export async function buildBrowserIndex(corpusDir, outDir, options = {}) {
   let shard = [];
   let ordinal = 0;
 
-  for await (const message of readJsonl(messagesPath)) {
+  for await (const message of readCorpusMessages(corpusDir)) {
     const compact = compactBrowserMessage(message, ordinal);
     shard.push(compact);
     addTerms(termPostings, message, ordinal, { minTermLength, maxPostings });

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readJsonl } from "./jsonl.mjs";
+import { readCorpusMessages } from "./corpus-shards.mjs";
 import { buildCorpusFromDiscordChatExporter, mergeCorpusDirs } from "./corpus.mjs";
 import { searchMessages, getConversationContext, formatSearchResult, formatContextMessage } from "./search.mjs";
 import { buildEmbeddings, searchEmbeddings } from "./embeddings.mjs";
@@ -223,7 +223,7 @@ async function vectorSearch(options) {
     return;
   }
 
-  const messages = await loadMessagesById(path.join(corpusDir, "messages.jsonl"), results.map((result) => result.id));
+  const messages = await loadMessagesById(corpusDir, results.map((result) => result.id));
   for (const result of results) {
     const message = messages.get(result.id);
     if (message) {
@@ -275,11 +275,11 @@ async function readVector(options) {
   return parsed;
 }
 
-async function loadMessagesById(messagesPath, ids) {
+async function loadMessagesById(corpusDir, ids) {
   const wanted = new Set(ids);
   const messages = new Map();
 
-  for await (const message of readJsonl(messagesPath)) {
+  for await (const message of readCorpusMessages(corpusDir)) {
     if (wanted.has(message.id)) {
       messages.set(message.id, message);
       if (messages.size === wanted.size) {
@@ -341,7 +341,7 @@ Usage:
 
 Commands:
   export   Run DiscordChatExporter. Use --incremental to export after the corpus watermark.
-  ingest   Build readable data/corpus/messages.jsonl from DiscordChatExporter JSON.
+  ingest   Build readable data/corpus/messages-YYYY.jsonl from DiscordChatExporter JSON.
   build-corpus
            Alias for ingest.
   merge-corpus

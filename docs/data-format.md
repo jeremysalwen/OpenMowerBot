@@ -8,7 +8,9 @@ Raw data is local scratch data. Re-run corpus generation instead of editing raw 
 
 ## Corpus Messages
 
-`data/corpus/messages.jsonl` is newline-delimited JSON. Each line is one readable message record intended for git, agents, and browser preprocessing.
+`data/corpus/messages-YYYY.jsonl` is newline-delimited JSON, split into one file per calendar year. Each line is one readable message record intended for git, agents, and browser preprocessing.
+
+The corpus is sharded by year because GitHub rejects any file over 100 MB, and a single `messages.jsonl` had reached 98 MB. Year shards keep every file far below that ceiling and confine growth to the current year. Readers concatenate the shards in filename order, which is chronological.
 
 Example:
 
@@ -76,7 +78,7 @@ For browser use, vectors can later be sharded and quantized. Keep message/chunk 
 
 ## Browser Shards
 
-For static hosting, derive smaller shards from `messages.jsonl`:
+For static hosting, derive smaller shards from the corpus:
 
 ```text
 data/index/browser/manifest.json

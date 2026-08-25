@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { readJsonl } from "./jsonl.mjs";
+import { readCorpusMessages } from "./corpus-shards.mjs";
 
 const DEFAULT_EMBEDDING_MODEL = "Xenova/all-MiniLM-L6-v2";
 const DEFAULT_BATCH_SIZE = 8;
@@ -22,7 +23,7 @@ export async function buildEmbeddings(corpusDir, indexDir, options = {}) {
   const batchSize = Number(options.batchSize || DEFAULT_BATCH_SIZE);
   const maxChars = Number(options.maxChars || DEFAULT_MAX_CHARS);
   const limit = options.limit ? Number(options.limit) : Infinity;
-  const messagesPath = path.join(corpusDir, "messages.jsonl");
+
   const embeddingsPath = path.join(indexDir, "embeddings.jsonl");
   const manifestPath = path.join(indexDir, "embeddings-manifest.json");
 
@@ -38,7 +39,7 @@ export async function buildEmbeddings(corpusDir, indexDir, options = {}) {
   let batch = [];
 
   try {
-    for await (const message of readJsonl(messagesPath)) {
+    for await (const message of readCorpusMessages(corpusDir)) {
       if (count + batch.length >= limit) {
         break;
       }

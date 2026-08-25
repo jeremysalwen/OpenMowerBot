@@ -1,13 +1,11 @@
-import path from "node:path";
-import { readJsonl } from "./jsonl.mjs";
+import { readCorpusMessages } from "./corpus-shards.mjs";
 
 export async function searchMessages(indexDir, options = {}) {
-  const messagesPath = path.join(indexDir, "messages.jsonl");
   const query = normalizeQuery(options.q || "");
   const limit = Number(options.limit || 20);
   const results = [];
 
-  for await (const message of readJsonl(messagesPath)) {
+  for await (const message of readCorpusMessages(indexDir)) {
     if (!matchesFilters(message, options)) {
       continue;
     }
@@ -31,14 +29,13 @@ export async function searchMessages(indexDir, options = {}) {
 }
 
 export async function getConversationContext(indexDir, options = {}) {
-  const messagesPath = path.join(indexDir, "messages.jsonl");
   const limit = Number(options.limit || 80);
   const minutesBefore = Number(options.minutesBefore || options["minutes-before"] || 45);
   const minutesAfter = Number(options.minutesAfter || options["minutes-after"] || 45);
   let center = null;
 
   if (options.messageId) {
-    for await (const message of readJsonl(messagesPath)) {
+    for await (const message of readCorpusMessages(indexDir)) {
       if (message.id === String(options.messageId)) {
         center = message;
         break;
@@ -68,7 +65,7 @@ export async function getConversationContext(indexDir, options = {}) {
   }
 
   const messages = [];
-  for await (const message of readJsonl(messagesPath)) {
+  for await (const message of readCorpusMessages(indexDir)) {
     if (channel && !fieldIncludes([message.channelId, message.channelName], channel)) {
       continue;
     }
