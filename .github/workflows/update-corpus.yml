@@ -8,6 +8,12 @@ on:
 permissions:
   contents: write
 
+# Two overlapping runs would race each other's pushes and fight over the
+# mirror's INDEX.txt and MISSING.tsv. Let an in-progress run finish.
+concurrency:
+  group: update-corpus
+  cancel-in-progress: false
+
 jobs:
   update-corpus:
     runs-on: ubuntu-latest
@@ -117,10 +123,18 @@ jobs:
           git add -A
           if git diff --cached --quiet; then
             echo "No attachment changes."
-          else
-            git commit -m "Add attachments from Discord corpus update"
-            git push
+            exit 0
           fi
+          git commit -m "Add attachments from Discord corpus update"
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); rebasing onto origin/main."
+            git pull --rebase origin main
+          done
+          echo "Could not push attachments after 3 attempts." >&2
+          exit 1
 
       - name: Show corpus stats
         run: node ./bin/discord-history.mjs stats --corpus data/corpus
@@ -133,7 +147,18 @@ jobs:
           git add data/corpus
           if git diff --cached --quiet; then
             echo "No corpus changes."
-          else
-            git commit -m "Update Discord corpus"
-            git push
+            exit 0
           fi
+          git commit -m "Update Discord corpus"
+          # main can move while this job runs: a push to the repository, or an
+          # overlapping run. Rebase onto whatever landed and retry rather than
+          # losing the run's work to a rejected push.
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); rebasing onto origin/main."
+            git pull --rebase origin main
+          done
+          echo "Could not push the corpus after 3 attempts." >&2
+          exit 1
