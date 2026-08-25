@@ -17,7 +17,8 @@ const DEFAULT_WEBLLM_MODEL = "Qwen3-0.6B-q4f16_1-MLC";
 const DEFAULT_TRANSFORMERS_MODEL = "onnx-community/Qwen3-0.6B-ONNX";
 const APP_VERSION = "2026-06-27.13";
 // Optional build-time site config. The GitHub Pages deploy sets
-// attachmentsLocal:false because attachments are not published to Pages.
+// attachmentBaseUrl, because attachment bytes are not published alongside the
+// app; they live in the attachments mirror repository.
 const SITE_CONFIG = (typeof window !== "undefined" && window.DISCORD_HISTORY_CONFIG) || {};
 
 const state = {
@@ -682,17 +683,35 @@ function renderSourceCard(n, message) {
   if (message.url) links.append(link("Discord message", message.url));
   if (message.replyUrl) links.append(link("Reply", message.replyUrl));
   for (const attachment of message.at || []) {
-    const local = attachment.path ? `../${attachment.path}` : null;
-    // When local attachments are not published (Pages), prefer the Discord URL.
-    const href = SITE_CONFIG.attachmentsLocal === false
-      ? attachment.url || local
-      : local || attachment.url;
+    const href = attachmentHref(attachment);
     if (href) links.append(link(attachment.name || "attachment", href));
   }
 
   card.append(meta, content);
   if (links.childElementCount > 0) card.append(links);
   return card;
+}
+
+// Resolve an attachment to a link target.
+//
+// On GitHub Pages the attachment bytes are not published next to the app, so
+// links point at the attachments mirror repository; served locally, the copy
+// under data/attachments/ is used directly. Original Discord CDN URLs are
+// signed and have expired, so they are only a last resort.
+function attachmentHref(attachment) {
+  const localPath = attachment.path || "";
+  const base = SITE_CONFIG.attachmentBaseUrl;
+
+  if (base && localPath.startsWith(ATTACHMENTS_PREFIX)) {
+    const suffix = localPath.slice(ATTACHMENTS_PREFIX.length)
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/");
+    return `${base.endsWith("/") ? base : `${base}/`}${suffix}`;
+  }
+
+  if (localPath) return `../${localPath}`;
+  return attachment.url || null;
 }
 
 function focusSource(n) {

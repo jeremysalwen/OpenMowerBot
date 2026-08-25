@@ -15,11 +15,14 @@ data/media/**
 data/index/**
 !data/index/.gitkeep
 
-# Compact corpus files and selected attachments are intended to be reviewed and committed.
+# Compact corpus files are intended to be reviewed and committed.
 !data/corpus/
 !data/corpus/**
-!data/attachments/
-!data/attachments/**
+
+# Attachment bytes live in the OpenMowerBot-attachments repository, not here.
+# data/attachments/ is a local cache populated by `download-attachments`.
+data/attachments/**
+!data/attachments/.gitkeep
 
 # Local browser/CLI caches.
 .cache/

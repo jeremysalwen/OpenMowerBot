@@ -13,6 +13,8 @@
     "build-corpus": "node ./bin/discord-history.mjs build-corpus",
     "merge-corpus": "node ./bin/discord-history.mjs merge-corpus",
     "download-attachments": "node ./bin/discord-history.mjs download-attachments",
+    "recover-attachments": "node ./bin/discord-history.mjs recover-attachments",
+    "write-attachment-index": "node ./bin/discord-history.mjs write-attachment-index",
     "build-browser-index": "node ./bin/discord-history.mjs build-browser-index",
     "build-embeddings": "node ./bin/discord-history.mjs build-embeddings",
     "search": "node ./bin/discord-history.mjs search",

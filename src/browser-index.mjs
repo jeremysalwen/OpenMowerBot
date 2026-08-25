@@ -46,13 +46,18 @@ export async function buildBrowserIndex(corpusDir, outDir, options = {}) {
 
   const termBuckets = await writeTermBuckets(searchDir, termPostings);
   // Archived attachments live alongside the corpus (data/attachments by the
-  // data contract). Resolve their root so the archive can bundle local copies
-  // instead of hotlinking the original Discord CDN URLs.
+  // data contract). Resolve their root so the archive can bundle local copies.
   const attachmentsRoot = path.resolve(path.dirname(path.resolve(corpusDir)), "attachments");
+  // With a base URL the archive hotlinks the attachments mirror instead of
+  // bundling bytes; the index file says which files the mirror actually holds.
+  const attachmentBaseUrl = normalizeBaseUrl(options.attachmentBaseUrl || options["attachment-base-url"]);
+  const availablePaths = await readAttachmentIndex(options.attachmentIndex || options["attachment-index"]);
   const archive = await writeStaticArchive(archiveDir, archiveChannels, {
     generatedAt,
     pageSize: archivePageSize,
     attachmentsRoot,
+    attachmentBaseUrl,
+    availablePaths,
   });
   const manifest = {
     schemaVersion: 1,
@@ -247,7 +252,7 @@ async function writeStaticArchive(archiveDir, channelsMap, options) {
   const archiveOptions = {
     ...options,
     archiveLinks: buildArchiveMessageLinks(channels),
-    attachmentLinks: await bundleArchiveAttachments(archiveDir, channels, options.attachmentsRoot),
+    attachmentLinks: await resolveArchiveAttachments(archiveDir, channels, options),
   };
 
   let pageCount = 1;
@@ -372,14 +377,24 @@ function buildArchiveMessageLinks(channels) {
   return links;
 }
 
-// Copy every referenced, on-disk attachment into the archive so it is fully
-// self-contained and portable: image previews and download links point at the
-// bundled copy instead of hotlinking the original Discord CDN URL. Returns a
-// map from a message's compact localPath to the page-relative href of its
-// bundled copy. Channel pages all live at channels/<slug>/, so every reference
-// uses the same ../../attachments/ prefix as styles.css. Attachments without a
-// usable local copy are omitted and fall back to their Discord URL.
-async function bundleArchiveAttachments(archiveDir, channels, attachmentsRoot) {
+// Resolve every referenced attachment to an href the archive can link to.
+//
+// With an attachment base URL (the GitHub Pages build), links point at the
+// attachments mirror repository on raw.githubusercontent.com. Nothing is
+// copied, so the published site stays well under the 1 GB Pages limit and the
+// build never needs the attachment bytes at all. `availablePaths`, when given,
+// is the authoritative set of files the mirror actually holds, so attachments
+// that were never archived are not linked to a 404.
+//
+// Without a base URL (a local build), every on-disk attachment is copied into
+// the archive so it stays self-contained and portable. Channel pages all live
+// at channels/<slug>/, so bundled references use the same ../../attachments/
+// prefix as styles.css.
+//
+// Returns a map from a message's compact localPath to its href. Attachments
+// with no usable copy are omitted and render as unavailable.
+async function resolveArchiveAttachments(archiveDir, channels, options = {}) {
+  const { attachmentsRoot, attachmentBaseUrl, availablePaths } = options;
   const links = new Map();
   if (!attachmentsRoot) return links;
 
@@ -396,8 +411,18 @@ async function bundleArchiveAttachments(archiveDir, channels, attachmentsRoot) {
         const source = path.resolve(localPath);
         const suffix = path.relative(attachmentsRoot, source);
         // Skip anything resolving outside the attachments root; it has no safe
-        // place in the bundle and keeps its original URL.
+        // place in the bundle and no place in the mirror.
         if (!suffix || suffix.startsWith("..") || path.isAbsolute(suffix)) continue;
+
+        const segments = suffix.split(path.sep);
+        const relative = segments.join("/");
+        const encoded = segments.map(encodeURIComponent).join("/");
+
+        if (attachmentBaseUrl) {
+          if (availablePaths && !availablePaths.has(relative)) continue;
+          links.set(localPath, `${attachmentBaseUrl}${encoded}`);
+          continue;
+        }
 
         let stats;
         try {
@@ -409,18 +434,36 @@ async function bundleArchiveAttachments(archiveDir, channels, attachmentsRoot) {
         // bundle a broken image; these fall back to a plain link instead.
         if (await isLfsPointer(source, stats.size)) continue;
 
-        const segments = suffix.split(path.sep);
         const dest = path.join(attachmentsDir, ...segments);
         await fs.mkdir(path.dirname(dest), { recursive: true });
         await fs.copyFile(source, dest, fs.constants.COPYFILE_FICLONE);
-
-        const href = `../../attachments/${segments.map(encodeURIComponent).join("/")}`;
-        links.set(localPath, href);
+        links.set(localPath, `../../attachments/${encoded}`);
       }
     }
   }
 
   return links;
+}
+
+// A trailing slash keeps attachment hrefs a plain concatenation at the call site.
+function normalizeBaseUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  return raw.endsWith("/") ? raw : `${raw}/`;
+}
+
+// The attachments mirror ships an index of the files it holds, one relative
+// path per line, so a Pages build can tell what is linkable without cloning
+// hundreds of MB of images. Blank lines and # comments are ignored.
+async function readAttachmentIndex(indexPath) {
+  if (!indexPath) return null;
+  const text = await fs.readFile(path.resolve(indexPath), "utf8");
+  const paths = new Set();
+  for (const line of text.split("\n")) {
+    const entry = line.trim();
+    if (entry && !entry.startsWith("#")) paths.add(entry);
+  }
+  return paths;
 }
 
 // A Git LFS pointer is a tiny text file beginning with a version line. Detect

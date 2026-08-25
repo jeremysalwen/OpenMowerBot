@@ -19,6 +19,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # Attachment bytes live in a separate repository as ordinary Git objects,
+      # so they carry no Git LFS bandwidth budget. ATTACHMENTS_TOKEN needs write
+      # access to it; without the secret this job cannot publish new files.
+      - name: Check out attachments mirror
+        uses: actions/checkout@v4
+        with:
+          repository: jeremysalwen/OpenMowerBot-attachments
+          token: ${{ secrets.ATTACHMENTS_TOKEN }}
+          path: attachments-mirror
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -73,13 +83,44 @@ jobs:
 
       - name: Download selected attachments
         # Refreshes expired Discord CDN URLs via the API (DISCORD_TOKEN above)
-        # before fetching. Only missing files are downloaded; rosbags bypass the
-        # size cap. Existing attachments are present as LFS pointer stubs (LFS
-        # objects are intentionally not fetched here) and are skipped as-is.
+        # before fetching. Only files the mirror does not already hold are
+        # downloaded; rosbags bypass the size cap.
         run: |
           node ./bin/discord-history.mjs download-attachments \
             --corpus data/corpus \
+            --out attachments-mirror \
             --max-size 1049600
+
+      # Attachments the archive already held before the move off Git LFS, whose
+      # objects are stranded behind the exhausted LFS budget. Discord re-signs
+      # their expired URLs while the original message still exists, so these are
+      # recovered from Discord and verified against the recorded LFS checksum.
+      - name: Recover stranded attachments
+        run: |
+          node ./bin/discord-history.mjs recover-attachments \
+            --corpus data/corpus \
+            --manifest attachments-mirror/MISSING.tsv \
+            --out attachments-mirror
+
+      - name: Update attachments index
+        run: |
+          node ./bin/discord-history.mjs write-attachment-index \
+            --mirror attachments-mirror \
+            --missing attachments-mirror/MISSING.tsv
+
+      - name: Commit attachments mirror
+        working-directory: attachments-mirror
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No attachment changes."
+          else
+            git commit -m "Add attachments from Discord corpus update"
+            git push
+          fi
 
       - name: Show corpus stats
         run: node ./bin/discord-history.mjs stats --corpus data/corpus
@@ -89,7 +130,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/corpus data/attachments
+          git add data/corpus
           if git diff --cached --quiet; then
             echo "No corpus changes."
           else

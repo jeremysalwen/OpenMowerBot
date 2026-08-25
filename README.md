@@ -6,7 +6,7 @@ The full message history of the **OpenMower** Discord server, normalized into pl
 
 ## The archive
 
-The corpus is `data/corpus/messages.jsonl` — one JSON object per message, with `timestamp`, `channelName`, `authorName`, `content`, `messageUrl`, attachments, and reply links. Selected attachments are under `data/attachments/`. That file is the archive; everything else is tooling on top of it.
+The corpus is `data/corpus/messages.jsonl` — one JSON object per message, with `timestamp`, `channelName`, `authorName`, `content`, `messageUrl`, attachments, and reply links. That file is the archive; everything else is tooling on top of it. Cloning gets you the text corpus only, so it stays small; attachment files live in a [separate repository](https://github.com/jeremysalwen/OpenMowerBot-attachments) and are fetched on demand.
 
 Search it with the bundled CLI (Node 18+, no dependencies):
 
@@ -59,7 +59,7 @@ DiscordHistory/
   docs/                  Human-facing project notes.
   data/raw/              Local raw DiscordChatExporter JSON exports, ignored.
   data/corpus/           Committed readable message corpus.
-  data/attachments/      Committed selected attachment files.
+  data/attachments/      Local attachment cache, ignored (see Attachments).
   data/media/            Local raw exporter media, ignored.
   data/index/            Derived heavier search/vector indexes, reproducible.
   web/                   Static browser search and local-answer page.
@@ -87,7 +87,9 @@ The core CLI requires Node 18+ and has no npm dependencies.
 
 - `build-corpus`: reads DiscordChatExporter JSON from `data/raw` and writes `data/corpus/messages.jsonl` plus `data/corpus/manifest.json`.
 - `merge-corpus`: merges an incremental corpus into the checked-in corpus by message ID.
-- `download-attachments`: downloads selected small/useful attachments, including source-code uploads.
+- `download-attachments`: downloads selected small/useful attachments into the ignored `data/attachments/` cache, or into a mirror checkout with `--out`.
+- `recover-attachments`: re-fetches attachments listed in a mirror's `MISSING.tsv` from Discord, verifying each against its recorded checksum.
+- `write-attachment-index`: writes the mirror's `INDEX.txt` of held attachments.
 - `build-browser-index`: writes static JSON message shards and lexical term buckets under `data/index/browser`.
 - `build-embeddings`: writes `data/index/embeddings.jsonl` with a local Transformers.js model when `@huggingface/transformers` is installed.
 - `search`: text, date range, author, channel, and attachment filters.
@@ -110,18 +112,40 @@ node ./bin/discord-history.mjs vector-search --vector-file query-vector.json --l
 - `DISCORD_TOKEN`: bot token with read access to the target channels and threads.
 - `OPENMOWER_GUILD_ID`: Discord guild/server ID.
 
-The workflow exports only messages after `data/corpus/manifest.json`'s latest timestamp, builds a delta corpus, merges by message ID, downloads selected attachments, and commits `data/corpus` plus `data/attachments`. Run the full local export once before enabling scheduled updates so the repository has an initial watermark.
+The workflow exports only messages after `data/corpus/manifest.json`'s latest timestamp, builds a delta corpus, merges by message ID, and commits `data/corpus`. New attachments are downloaded into a checkout of the attachments repository and pushed there, which needs a third secret:
+
+- `ATTACHMENTS_TOKEN`: token with write access to `OpenMowerBot-attachments`.
+
+Run the full local export once before enabling scheduled updates so the repository has an initial watermark.
 
 The scheduled export intentionally uses lower DiscordChatExporter parallelism and rate-limit retries. Large guild exports can hit Discord 429 responses while channels and threads are enumerated, so unattended updates favor reliability over speed.
+
+## Attachments
+
+Attachment bytes live in [OpenMowerBot-attachments](https://github.com/jeremysalwen/OpenMowerBot-attachments) as ordinary Git objects. They are deliberately **not** stored here and **not** in Git LFS.
+
+They used to be tracked here with LFS. LFS downloads are metered against a bandwidth budget that fails closed, and once it was exhausted `git clone` of this repository aborted during checkout — leaving a tree that looked like thousands of deleted files. Plain Git objects in a separate repository are not metered, so this repository clones fast and the attachments stay full quality.
+
+- A mirror path is the corpus `localPath` with the `data/attachments/` prefix removed.
+- Raw URL: `https://raw.githubusercontent.com/jeremysalwen/OpenMowerBot-attachments/main/<channelId>/<messageId>-<fileName>`
+- `INDEX.txt` lists what the mirror holds; the Pages build reads it so the archive never links to a file that is not there.
+- `MISSING.tsv` lists attachments the corpus references that the mirror does not have yet.
+
+To get the files locally, either populate the ignored cache from the corpus, or clone the mirror (~577 MB):
+
+```bash
+node ./bin/discord-history.mjs download-attachments --corpus data/corpus
+git clone https://github.com/jeremysalwen/OpenMowerBot-attachments.git
+```
 
 ## Publishing
 
 Recommended repository policy:
 
-- Commit source code, docs, `AGENTS.md`, `data/corpus`, and reviewed selected attachments.
+- Commit source code, docs, `AGENTS.md`, and `data/corpus`.
 - Keep `.env` and Discord tokens out of git.
 - Do not commit the full raw export.
-- Use Git LFS or release assets if selected attachments are too large for normal git. `.gitattributes` marks selected attachments and binary index files for LFS.
+- Do not commit attachment bytes here, and do not enable Git LFS. See [Attachments](#attachments).
 - For static hosting, publish `web/` and the generated browser index from `data/index/browser`. The corpus is only needed to build the index; the browser app reads the index, not `data/corpus` directly.
 
 ### GitHub Pages
@@ -131,7 +155,7 @@ Recommended repository policy:
 - One-time setup: in the repository settings, set **Pages → Build and deployment → Source** to **GitHub Actions**.
 - Live URL: `https://jeremysalwen.github.io/OpenMowerBot/` (the bare URL redirects into the app under `/web/`).
 - Triggers: pushes that touch `web/`, `data/corpus`, `src/`, or `bin/`; completion of the scheduled **Update Discord corpus** run; and manual `workflow_dispatch`.
-- Attachments are not published to Pages. The deploy sets `attachmentsLocal:false` in `web/config.js`, so attachment links fall back to the original Discord CDN URLs. Served locally, the committed `web/config.js` keeps attachment links pointed at local `data/attachments` files.
+- Attachment bytes are not published to Pages, which caps a site at 1 GB. The deploy sets `attachmentBaseUrl` in `web/config.js` and passes `--attachment-base-url` to the index build, so pages hotlink the attachments repository over `raw.githubusercontent.com`. Served locally, the committed `web/config.js` sets no base URL and links resolve against `data/attachments/` instead.
 
 ## Browser app architecture
 

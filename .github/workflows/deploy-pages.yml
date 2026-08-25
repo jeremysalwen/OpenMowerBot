@@ -32,6 +32,11 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  # Attachments live in a separate repository as ordinary Git objects, so they
+  # are served without a Git LFS bandwidth budget.
+  ATTACHMENT_BASE_URL: https://raw.githubusercontent.com/jeremysalwen/OpenMowerBot-attachments/main/
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -40,18 +45,29 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          # Attachments are stored in Git LFS; fetch the real files so the
-          # static archive bundles actual images rather than LFS pointer stubs.
-          lfs: true
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
+      # The archive hotlinks attachments from the mirror repository rather than
+      # bundling them, so the published site stays far below the 1 GB Pages
+      # limit and this build never downloads any image data. The mirror's index
+      # says which attachments actually exist, so the archive never links a 404.
+      - name: Fetch attachments index
+        run: |
+          set -euo pipefail
+          curl -fsSL "${ATTACHMENT_BASE_URL}INDEX.txt" -o /tmp/attachments-index.txt
+          echo "Mirror holds $(wc -l < /tmp/attachments-index.txt) attachments."
+
       - name: Build browser index
-        run: node ./bin/discord-history.mjs build-browser-index --corpus data/corpus --out data/index/browser
+        run: |
+          node ./bin/discord-history.mjs build-browser-index \
+            --corpus data/corpus \
+            --out data/index/browser \
+            --attachment-base-url "$ATTACHMENT_BASE_URL" \
+            --attachment-index /tmp/attachments-index.txt
 
       - name: Assemble site
         run: |
@@ -60,15 +76,16 @@ jobs:
           mkdir -p _site/web _site/data/index
           cp -R web/. _site/web/
           cp -R data/index/browser _site/data/index/browser
-          # The archive dir already bundles its own attachments under
-          # archive/attachments/, so this copy publishes the archived images too.
+          # The archive hotlinks the attachments mirror, so this copies pages
+          # and styles only -- no image bytes are published here.
           cp -R data/index/browser/archive _site/archive
           rm -rf _site/data/index/browser/archive
           # Google Search Console verification for the archive directory.
           cp googlec79aed56133bffbd.html _site/archive/
-          # The browser assistant app's own attachments are not published; its
-          # Sources panel links to the Discord CDN.
-          printf 'window.DISCORD_HISTORY_CONFIG = { attachmentsLocal: false };\n' > _site/web/config.js
+          # Attachment bytes are not published next to the app; point its
+          # Sources panel at the attachments mirror.
+          printf 'window.DISCORD_HISTORY_CONFIG = { attachmentBaseUrl: "%s" };\n' \
+            "$ATTACHMENT_BASE_URL" > _site/web/config.js
           # Make the bare Pages URL link to both static entry points.
           cat > _site/index.html <<'HTML'
           <!doctype html>

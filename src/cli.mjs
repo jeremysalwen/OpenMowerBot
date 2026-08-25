@@ -6,7 +6,11 @@ import { searchMessages, getConversationContext, formatSearchResult, formatConte
 import { buildEmbeddings, searchEmbeddings } from "./embeddings.mjs";
 import { buildBrowserIndex } from "./browser-index.mjs";
 import { runDiscordChatExporter } from "./exporter.mjs";
-import { downloadSelectedAttachments } from "./attachments.mjs";
+import {
+  downloadSelectedAttachments,
+  recoverMissingAttachments,
+  writeAttachmentIndex,
+} from "./attachments.mjs";
 
 export async function main(argv) {
   const [command, ...rest] = argv;
@@ -25,6 +29,12 @@ export async function main(argv) {
       break;
     case "download-attachments":
       await downloadAttachments(options);
+      break;
+    case "recover-attachments":
+      await recoverAttachments(options);
+      break;
+    case "write-attachment-index":
+      await attachmentIndex(options);
       break;
     case "build-browser-index":
       await browserIndex(options);
@@ -104,6 +114,32 @@ async function downloadAttachments(options) {
   console.log(`Skipped by type: ${stats.skippedType}`);
   console.log(`Failed: ${stats.failed}`);
   console.log(`Downloaded bytes: ${stats.bytes}`);
+}
+
+async function recoverAttachments(options) {
+  const stats = await recoverMissingAttachments(options);
+
+  console.log(`Listed as missing: ${stats.wanted}`);
+  console.log(`Matched in corpus: ${stats.matched}`);
+  console.log(`Recovered: ${stats.recovered}`);
+  console.log(`Checksum verified: ${stats.verified}`);
+  console.log(`Checksum mismatched: ${stats.mismatched}`);
+  console.log(`Failed: ${stats.failed}`);
+  console.log(`Recovered bytes: ${stats.bytes}`);
+}
+
+async function attachmentIndex(options) {
+  const mirrorDir = options.mirror || options.out || options._?.[0];
+  if (!mirrorDir) {
+    throw new Error("write-attachment-index requires --mirror DIR");
+  }
+
+  const result = await writeAttachmentIndex(mirrorDir, { missing: options.missing });
+  console.log(`Indexed ${result.count} attachments.`);
+  console.log(`Wrote ${result.path}`);
+  if (options.missing) {
+    console.log(`Pruned from ${options.missing}: ${result.pruned}`);
+  }
 }
 
 async function browserIndex(options) {
@@ -294,6 +330,7 @@ Usage:
   discord-history ingest --raw data/raw --out data/corpus
   discord-history merge-corpus --delta data/corpus-incremental
   discord-history download-attachments --dry-run
+  discord-history recover-attachments --manifest ../OpenMowerBot-attachments/MISSING.tsv
   discord-history build-browser-index
   discord-history build-embeddings --model Xenova/all-MiniLM-L6-v2
   discord-history search --q "gps fix" --channel general --after 2024-01-01
@@ -311,6 +348,10 @@ Commands:
            Merge an incremental corpus into the checked-in corpus by message ID.
   download-attachments
            Download selected small/useful attachments listed in the corpus.
+  recover-attachments
+           Re-fetch attachments listed in a mirror's MISSING.tsv from Discord.
+  write-attachment-index
+           Write a mirror's INDEX.txt of held attachments.
   build-browser-index
            Build static JSON shards, lexical term buckets, and HTML archive pages.
   build-embeddings
@@ -343,9 +384,24 @@ Attachment download:
                         (defaults to DISCORD_TOKEN in .env).
   --bot                 Treat the token as a bot token (Authorization: Bot ...).
   --no-refresh          Do not refresh expired URLs via the Discord API.
+  --out DIR             Write into DIR instead of data/attachments, e.g. a
+                        checkout of the attachments mirror repository.
+
+Attachment recovery and mirror index:
+  --manifest FILE       MISSING.tsv of attachments to recover. No size cap is
+                        applied; entries are files the archive already held.
+                        Downloads are verified against the recorded checksum.
+  --mirror DIR          Attachments mirror checkout to index.
+  --missing FILE        Also prune recovered entries from this MISSING.tsv.
 
 Browser index:
   --out DIR             Output directory, default data/index/browser.
+  --attachment-base-url URL
+                        Hotlink attachments from this base instead of copying
+                        them into the archive (used by the Pages build).
+  --attachment-index FILE
+                        Mirror INDEX.txt listing which attachments exist, so
+                        the archive never links to a missing file.
   --shard-size N        Messages per browser shard, default 1000.
   --max-postings N      Max postings retained per search term, default 50000.
   --archive-page-size N Messages per static archive page, default 200.
