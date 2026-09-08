@@ -1,13 +1,13 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-07T10:45:06.820Z",
-  "messageCount": 115396,
-  "attachmentMessageCount": 7081,
-  "attachmentCount": 8725,
-  "attachmentBytes": 9558888031,
+  "generatedAt": "2026-09-08T10:07:23.663Z",
+  "messageCount": 115407,
+  "attachmentMessageCount": 7082,
+  "attachmentCount": 8726,
+  "attachmentBytes": 9558889673,
   "dateRange": {
     "after": "2022-03-29T17:34:24.652-04:00",
-    "before": "2026-09-07T10:19:48.679+00:00"
+    "before": "2026-09-07T16:01:30.963+00:00"
   },
   "guilds": {},
   "channels": {
@@ -1120,6 +1120,11 @@
       "id": "1543592629546127431",
       "name": "RPi fried",
       "count": 1
+    },
+    "1546428177084063754": {
+      "id": "1546428177084063754",
+      "name": "You need to be in \"Area recording mode\"",
+      "count": 11
     }
   },
   "authors": {
@@ -7736,7 +7741,7 @@
     "976812133125861386": {
       "id": "976812133125861386",
       "name": "Apehaenger",
-      "count": 6340
+      "count": 6343
     },
     "565311547619147781": {
       "id": "565311547619147781",
@@ -11351,7 +11356,7 @@
     "1359378033433120929": {
       "id": "1359378033433120929",
       "name": "Layne B",
-      "count": 20
+      "count": 28
     },
     "1048729334183108619": {
       "id": "1048729334183108619",
