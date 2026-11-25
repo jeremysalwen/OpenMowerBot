@@ -1,13 +1,13 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-24T16:19:02.766Z",
-  "messageCount": 117057,
-  "attachmentMessageCount": 7280,
-  "attachmentCount": 9001,
-  "attachmentBytes": 9990956438,
+  "generatedAt": "2026-11-25T16:02:12.980Z",
+  "messageCount": 117058,
+  "attachmentMessageCount": 7281,
+  "attachmentCount": 9002,
+  "attachmentBytes": 9991261776,
   "dateRange": {
     "after": "2022-03-29T17:34:24.652-04:00",
-    "before": "2026-11-24T09:47:08.726+00:00"
+    "before": "2026-11-25T08:23:18.265+00:00"
   },
   "guilds": {},
   "channels": {
@@ -34,7 +34,7 @@
     "958476544299401217": {
       "id": "958476544299401217",
       "name": "random",
-      "count": 3778
+      "count": 3779
     },
     "958476544299401219": {
       "id": "958476544299401219",
@@ -9441,7 +9441,7 @@
     "700009211446296606": {
       "id": "700009211446296606",
       "name": "Lauri Laidna",
-      "count": 93
+      "count": 94
     },
     "341263339323785216": {
       "id": "341263339323785216",
