@@ -1,13 +1,13 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-26T15:44:00.596Z",
-  "messageCount": 117058,
-  "attachmentMessageCount": 7281,
-  "attachmentCount": 9002,
-  "attachmentBytes": 9991261776,
+  "generatedAt": "2026-11-27T15:31:42.653Z",
+  "messageCount": 117062,
+  "attachmentMessageCount": 7284,
+  "attachmentCount": 9005,
+  "attachmentBytes": 10005824934,
   "dateRange": {
     "after": "2022-03-29T17:34:24.652-04:00",
-    "before": "2026-11-25T08:23:18.265+00:00"
+    "before": "2026-11-27T00:38:36.275+00:00"
   },
   "guilds": {},
   "channels": {
@@ -24,7 +24,7 @@
     "958481126882680902": {
       "id": "958481126882680902",
       "name": "open-mower",
-      "count": 10545
+      "count": 10549
     },
     "958734489293574255": {
       "id": "958734489293574255",
@@ -13652,6 +13652,11 @@
       "id": "1291105450594402365",
       "name": "mt22130",
       "count": 3
+    },
+    "275309362153783306": {
+      "id": "275309362153783306",
+      "name": "Carnival Fantasy",
+      "count": 4
     }
   },
   "files": {
